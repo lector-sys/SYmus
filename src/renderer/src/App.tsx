@@ -1,124 +1,26 @@
 import { useEffect, useState } from 'react'
-import { Heart, House, Library, ListMusic, Search, SearchX } from 'lucide-react'
-import type { Track } from '../../preload'
+import {
+  Compass,
+  Download,
+  HardDriveDownload,
+  Heart,
+  House,
+  Library,
+  ListMusic,
+  Search,
+  Settings as SettingsIcon
+} from 'lucide-react'
 import { usePlayer, useNav, type View } from './store'
 import { useLibrary } from './useLibrary'
 import PlayerBar from './PlayerBar'
 import Queue from './Queue'
-import TrackRow from './TrackRow'
 import Home from './Home'
-import { LibraryView, LikedView, PlaylistView, GenreView } from './Library'
-import { Empty, Eyebrow, PageTitle, RowSkeletons } from './ui'
-
-function SearchView(): React.JSX.Element {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<Track[]>([])
-  const [busy, setBusy] = useState(false)
-  const [ran, setRan] = useState('')
-  const { playNow, addToQueue, toast, libraryChanged } = usePlayer()
-
-  async function submit(e: React.FormEvent): Promise<void> {
-    e.preventDefault()
-    const q = query.trim()
-    if (!q) return
-    setBusy(true)
-    try {
-      // A pasted link resolves to its own tracks (the whole playlist unless it
-      // is an RD… mix); anything else is a search.
-      let tracks: Track[]
-      let name: string | null = null
-      if (/^https?:\/\//i.test(q)) {
-        ;({ name, tracks } = await window.api.resolveUrl(q))
-        if (name) toast(`Loaded ${name} — ${tracks.length} tracks`)
-      } else {
-        tracks = await window.api.search(q)
-      }
-      setResults(tracks)
-      setRan(q)
-      // Saved with the query as a genre hint, so the library knows what these
-      // are even if the user never plays them.
-      window.api.lib
-        .save(tracks, name ?? q)
-        .then(libraryChanged)
-        .catch(() => {})
-    } catch (err) {
-      toast(err instanceof Error ? err.message : String(err))
-      setResults([])
-      setRan(q)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="view-enter px-6 py-6">
-      <div className="mb-6">
-        <PageTitle sub="Songs, albums, or any YouTube video and playlist link">Search</PageTitle>
-      </div>
-
-      <form onSubmit={submit} className="mb-8 flex gap-2">
-        <div className="relative flex-1">
-          <Search
-            size={16}
-            className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-dust"
-          />
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="What do you want to listen to?"
-            className="w-full rounded-full border border-line bg-panel py-3 pr-4 pl-11 text-sm outline-none transition-colors placeholder:text-dust focus:border-dust"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={busy || !query.trim()}
-          className="rounded-full bg-ember px-6 text-[13px] font-semibold text-ink transition-transform duration-150 ease-[cubic-bezier(.22,1,.36,1)] hover:scale-[1.03] active:scale-95 disabled:scale-100 disabled:opacity-25"
-        >
-          {busy ? 'Searching' : 'Search'}
-        </button>
-      </form>
-
-      {busy && <RowSkeletons />}
-
-      {!busy && results.length > 0 && (
-        <>
-          <Eyebrow
-            action={
-              <div className="flex gap-2">
-                <button
-                  onClick={() => playNow(results)}
-                  className="rounded-full bg-lifted px-3.5 py-1 text-[11px] font-medium transition-colors hover:bg-line"
-                >
-                  Play all
-                </button>
-                <button
-                  onClick={() => addToQueue(results)}
-                  className="rounded-full border border-line px-3.5 py-1 text-[11px] font-medium transition-colors hover:border-dust"
-                >
-                  Queue all
-                </button>
-              </div>
-            }
-          >
-            {results.length} results
-          </Eyebrow>
-          {results.map((t, i) => (
-            <TrackRow key={t.videoId} track={t} list={results} index={i} />
-          ))}
-        </>
-      )}
-
-      {!busy && ran && !results.length && (
-        <Empty
-          icon={SearchX}
-          title={`Nothing found for ${ran}`}
-          hint="Try fewer words, or paste the YouTube link directly."
-        />
-      )}
-    </div>
-  )
-}
+import Import from './Import'
+import { LibraryView, LikedView, PlaylistView, GenreView, ArtistView } from './Library'
+import { Eyebrow } from './ui'
+import SearchView from './Search'
+import Lyrics from './Lyrics'
+import { Explore, Downloaded, Settings, Album } from './views'
 
 function NavButton({
   to,
@@ -167,7 +69,7 @@ function Wordmark(): React.JSX.Element {
 
 export default function App(): React.JSX.Element {
   const [queueOpen, setQueueOpen] = useState(true)
-  const { toasts, refreshLikes } = usePlayer()
+  const { toasts, refreshLikes, lyricsOpen } = usePlayer()
   const { view, go } = useNav()
   const { data: playlists } = useLibrary(() => window.api.lib.playlists(), [])
 
@@ -184,7 +86,10 @@ export default function App(): React.JSX.Element {
           <div className="space-y-0.5">
             <NavButton to={{ kind: 'home' }} icon={House} label="Home" />
             <NavButton to={{ kind: 'search' }} icon={Search} label="Search" />
+            <NavButton to={{ kind: 'explore' }} icon={Compass} label="Explore" />
             <NavButton to={{ kind: 'library' }} icon={Library} label="Library" />
+            <NavButton to={{ kind: 'downloaded' }} icon={HardDriveDownload} label="Downloaded" />
+            <NavButton to={{ kind: 'import' }} icon={Download} label="Import" />
             <NavButton to={{ kind: 'liked' }} icon={Heart} label="Liked Songs" />
           </div>
 
@@ -214,6 +119,10 @@ export default function App(): React.JSX.Element {
               </p>
             )}
           </div>
+
+          <div className="mt-2 border-t border-line pt-2">
+            <NavButton to={{ kind: 'settings' }} icon={SettingsIcon} label="Settings" />
+          </div>
         </nav>
 
         <main className="min-w-0 flex-1 overflow-y-auto">
@@ -221,15 +130,21 @@ export default function App(): React.JSX.Element {
               restarts the enter animation and resets scroll. */}
           <div key={JSON.stringify(view)} className="min-h-full">
             {view.kind === 'home' && <Home />}
-            {view.kind === 'search' && <SearchView />}
+            {view.kind === 'search' && <SearchView initial={view.query} />}
+            {view.kind === 'import' && <Import />}
             {view.kind === 'library' && <LibraryView />}
             {view.kind === 'liked' && <LikedView />}
             {view.kind === 'playlist' && <PlaylistView id={view.id} title={view.title} />}
             {view.kind === 'genre' && <GenreView name={view.name} />}
+            {view.kind === 'artist' && <ArtistView name={view.name} />}
+            {view.kind === 'album' && <Album name={view.name} artist={view.artist} />}
+            {view.kind === 'explore' && <Explore />}
+            {view.kind === 'downloaded' && <Downloaded />}
+            {view.kind === 'settings' && <Settings />}
           </div>
         </main>
 
-        {queueOpen && <Queue />}
+        {lyricsOpen ? <Lyrics /> : queueOpen && <Queue />}
       </div>
 
       <PlayerBar onToggleQueue={() => setQueueOpen((v) => !v)} queueOpen={queueOpen} />

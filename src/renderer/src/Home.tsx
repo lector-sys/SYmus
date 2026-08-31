@@ -1,4 +1,4 @@
-import { Compass, Heart, ListMusic, Search } from 'lucide-react'
+import { Compass, Heart, ListMusic, Search, Tag, User } from 'lucide-react'
 import type { SavedTrack } from '../../preload'
 import { usePlayer, useNav } from './store'
 import { useLibrary } from './useLibrary'
@@ -58,6 +58,31 @@ function TrackShelf({
   )
 }
 
+function Chip({
+  icon: Icon,
+  label,
+  count,
+  onClick
+}: {
+  icon: typeof Compass
+  label: string
+  count: number
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className="group flex max-w-xs items-center gap-2.5 rounded-full border border-line bg-panel py-2 pr-3 pl-4 text-[13px] transition-colors duration-150 hover:border-dust hover:bg-raised"
+    >
+      <Icon size={13} className="shrink-0 text-dust transition-colors group-hover:text-ember" />
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 rounded-full bg-lifted px-2 py-0.5 font-mono text-[11px] text-ash">
+        {count}
+      </span>
+    </button>
+  )
+}
+
 export default function Home(): React.JSX.Element {
   const go = useNav((s) => s.go)
   const { playNow } = usePlayer()
@@ -68,6 +93,14 @@ export default function Home(): React.JSX.Element {
   const lists = useLibrary(() => window.api.lib.playlists(), [])
   const liked = useLibrary(() => window.api.lib.likes(), [])
   const genres = useLibrary(() => window.api.lib.genres(), [])
+  const artists = useLibrary(() => window.api.lib.artists(16), [])
+  const coverage = useLibrary(() => window.api.lib.genreCoverage(), { tagged: 0, total: 0 })
+
+  // Titles are "Artist - Song (Official Video)" and searches are "blinding
+  // lights", so neither carries a genre word and automatic tagging catches very
+  // little. Below a quarter tagged, genre chips alone are not a useful row, so
+  // Home browses by artist as well — artist is a field every track always has.
+  const thinGenres = coverage.data.total > 0 && coverage.data.tagged / coverage.data.total < 0.25
 
   const loading = recent.loading && made.loading && top.loading && lists.loading
   const empty =
@@ -170,20 +203,39 @@ export default function Home(): React.JSX.Element {
               <Eyebrow>Browse by genre</Eyebrow>
               <div className="flex flex-wrap gap-2">
                 {genres.data.map((g) => (
-                  <button
+                  <Chip
                     key={g.genre}
+                    icon={Compass}
+                    label={g.genre}
+                    count={g.count}
                     onClick={() => go({ kind: 'genre', name: g.genre })}
-                    className="group flex items-center gap-2.5 rounded-full border border-line bg-panel py-2 pr-3 pl-4 text-[13px] transition-colors duration-150 hover:border-dust hover:bg-raised"
-                  >
-                    <Compass
-                      size={13}
-                      className="text-dust transition-colors group-hover:text-ember"
-                    />
-                    {g.genre}
-                    <span className="rounded-full bg-lifted px-2 py-0.5 font-mono text-[11px] text-ash">
-                      {g.count}
-                    </span>
-                  </button>
+                  />
+                ))}
+              </div>
+              {thinGenres && (
+                <p className="mt-3 flex items-center gap-2 text-xs text-ash">
+                  <Tag size={12} className="shrink-0 text-dust" />
+                  {coverage.data.tagged} of {coverage.data.total} tracks are tagged. Tag one track
+                  by an artist and every other track by them is tagged too.
+                </p>
+              )}
+            </section>
+          )}
+
+          {/* Shown while genre data is still thin. Artist is never missing, so
+              this row always has something real in it. */}
+          {(thinGenres || !genres.data.length) && artists.data.length > 0 && (
+            <section className="mb-9">
+              <Eyebrow>Browse by artist</Eyebrow>
+              <div className="flex flex-wrap gap-2">
+                {artists.data.map((a) => (
+                  <Chip
+                    key={a.artist}
+                    icon={User}
+                    label={a.artist}
+                    count={a.count}
+                    onClick={() => go({ kind: 'artist', name: a.artist })}
+                  />
                 ))}
               </div>
             </section>

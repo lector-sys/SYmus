@@ -1,5 +1,5 @@
 import { prisma } from './db'
-import type { Track } from './youtube'
+import { search, type Track } from './youtube'
 
 export type SavedTrack = Track & { genre: string | null }
 
@@ -15,10 +15,18 @@ const GENRE_RULES: [string, RegExp][] = [
   ['Classical', /\bclassical\b|symphony|concerto|sonata|orchestra|beethoven|mozart|chopin|bach\b/i],
   ['Jazz', /\bjazz\b|bebop|swing band|saxophone|blue note/i],
   ['Metal', /\bmetal\b|metalcore|deathcore|thrash/i],
-  ['Rock', /\brock\b|punk|grunge|alt(ernative)?[- ]rock|indie rock|guitar solo/i],
+  // `punk` alone matched the band name in "ft. Daft Punk" and tagged The Weeknd
+  // as Rock. Genre words that are also common in band and song names must carry
+  // their qualifier.
+  ['Rock', /\brock\b|punk rock|pop punk|grunge|alt(ernative)?[- ]rock|indie rock|guitar solo/i],
   ['Hip-hop', /\bhip[- ]?hop\b|\brap\b|\btrap\b|drill\b|freestyle/i],
-  ['R&B', /\br ?& ?b\b|rhythm and blues|neo[- ]soul|\bsoul\b/i],
-  ['Electronic', /\bedm\b|house\b|techno|trance|dubstep|drum ?& ?bass|\bdnb\b|synthwave|electro/i],
+  // Bare `soul` caught "Hey Soul Sister" and "Heart and Soul".
+  ['R&B', /\br ?& ?b\b|rhythm and blues|neo[- ]soul|soul music|northern soul/i],
+  // Bare `house` caught "Full House Theme Song".
+  [
+    'Electronic',
+    /\bedm\b|house music|deep house|tech house|progressive house|techno|trance|dubstep|drum ?& ?bass|\bdnb\b|synthwave|electro\b/i
+  ],
   ['Pop', /\bpop\b|top ?40|k-?pop|j-?pop/i],
   ['Bollywood', /bollywood|hindi song|arijit|shreya ghoshal|\bfilmi\b/i],
   ['Indian classical', /carnatic|hindustani|raag|raga\b|bhajan|ghazal|qawwali/i],
@@ -262,9 +270,68 @@ export async function deletePlaylist(id: number): Promise<void> {
   await prisma.playlist.delete({ where: { id } })
 }
 
-export async function setGenre(videoId: string, genre: string | null): Promise<void> {
-  await prisma.track.updateMany({ where: { videoId }, data: { genre: genre?.trim() || null } })
+/**
+ * Tags a track, and carries the tag across to that artist's other *untagged*
+ * tracks.
+ *
+ * Real titles read "Artist - Song (Official Video)" and real searches read
+ * "blinding lights", so neither contains a genre word and automatic inference
+ * tags almost nothing. Propagating by artist is what makes manual tagging worth
+ * the click: one tag on a Weeknd track classifies every Weeknd track already in
+ * the library.
+ *
+ * Only nulls are filled, so a tag the user set by hand is never overwritten and
+ * this can never silently reclassify a deliberate choice.
+ *
+ * Returns how many other tracks were tagged, so the UI can say so.
+ */
+export async function setGenre(videoId: string, genre: string | null): Promise<number> {
+  const clean = genre?.trim() || null
+  const track = await prisma.track.findUnique({ where: { videoId }, select: { artist: true } })
+  await prisma.track.updateMany({ where: { videoId }, data: { genre: clean } })
+  if (!clean || !track?.artist) return 0
+
+  const { count } = await prisma.track.updateMany({
+    where: { artist: track.artist, genre: null, videoId: { not: videoId } },
+    data: { genre: clean }
+  })
+  return count
 }
+
+/** How much of the library carries a genre. Drives the Home fallback. */
+export async function genreCoverage(): Promise<{ tagged: number; total: number }> {
+  const [tagged, total] = await Promise.all([
+    prisma.track.count({ where: { genre: { not: null } } }),
+    prisma.track.count()
+  ])
+  return { tagged, total }
+}
+
+/**
+ * Artists with the most tracks in the library. Genre data stays sparse until the
+ * user tags something, but artist is always present, so Home can offer browsing
+ * by artist while the genre map fills in.
+ */
+export async function topArtists(limit = 16): Promise<{ artist: string; count: number }[]> {
+  const rows = await prisma.track.groupBy({
+    by: ['artist'],
+    where: { artist: { not: null } },
+    _count: { artist: true },
+    orderBy: { _count: { artist: 'desc' } },
+    take: limit
+  })
+  return rows.map((r) => ({ artist: r.artist!, count: r._count.artist }))
+}
+
+export const tracksByArtist = async (artist: string, limit = 60): Promise<SavedTrack[]> =>
+  (
+    await prisma.track.findMany({
+      where: { artist },
+      orderBy: { addedAt: 'desc' },
+      take: limit,
+      select: SELECT
+    })
+  ).map(toSaved)
 
 export async function setPlaylistGenre(id: number, genre: string | null): Promise<void> {
   await prisma.playlist.update({ where: { id }, data: { genre: genre?.trim() || null } })
@@ -364,4 +431,101 @@ export async function recommended(limit = 20): Promise<SavedTrack[]> {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((s) => toSaved(s.t))
+}
+
+/**
+ * Tracks similar to a seed, for autoplay and radio.
+ *
+ * Scored the same way as recommended(), but anchored on one track rather than
+ * on the whole taste profile: genre match outranks artist match, and play count
+ * only breaks ties. `exclude` carries the videoIds already played this session
+ * so a radio session cannot loop.
+ *
+ * Local library first. If that cannot fill the request, falls back to a YouTube
+ * search seeded from the track, saving whatever it finds — the same path a
+ * manual search takes, so autoplay grows the library instead of bypassing it.
+ */
+export async function similarTo(
+  seed: Track,
+  exclude: string[] = [],
+  limit = 10
+): Promise<SavedTrack[]> {
+  const row = await prisma.track.findUnique({
+    where: { videoId: seed.videoId },
+    select: { genre: true }
+  })
+  const genre = row?.genre ?? inferGenre(seed.title, seed.artist)
+  const skip = new Set([seed.videoId, ...exclude])
+
+  const plays = new Map(
+    (
+      await prisma.historyEntry.groupBy({
+        by: ['trackId'],
+        _count: { trackId: true }
+      })
+    ).map((g) => [g.trackId, g._count.trackId])
+  )
+
+  const match: Array<{ genre?: string; artist?: string }> = []
+  if (genre) match.push({ genre })
+  if (seed.artist) match.push({ artist: seed.artist })
+
+  let picked: SavedTrack[] = []
+  if (match.length) {
+    const pool = await prisma.track.findMany({
+      where: { OR: match, videoId: { notIn: [...skip] } },
+      take: 300,
+      select: { id: true, ...SELECT }
+    })
+    picked = pool
+      .map((t) => ({
+        t,
+        // Genre is the stronger signal: the same artist twice in a row is a
+        // rut, whereas the same genre is what "similar" actually means.
+        score:
+          (genre && t.genre === genre ? 3 : 0) +
+          (seed.artist && t.artist === seed.artist ? 2 : 0) +
+          Math.log2(1 + (plays.get(t.id) ?? 0))
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((s) => toSaved(s.t))
+  }
+
+  // Top up from the general profile before reaching for the network.
+  if (picked.length < limit) {
+    for (const t of await recommended(limit * 2)) {
+      if (picked.length >= limit) break
+      if (skip.has(t.videoId) || picked.some((p) => p.videoId === t.videoId)) continue
+      picked.push(t)
+    }
+  }
+  if (picked.length >= limit) return picked.slice(0, limit)
+
+  // Nothing local left that fits. Ask YouTube, seeded from the track.
+  const queries = [
+    seed.artist ? `${seed.artist} songs` : null,
+    genre ? `${genre} music mix` : null,
+    seed.title
+  ].filter((q): q is string => Boolean(q))
+
+  for (const query of queries) {
+    if (picked.length >= limit) break
+    let found: Track[] = []
+    try {
+      found = await search(query, 20)
+    } catch {
+      // Offline, rate limited, yt-dlp missing. Autoplay degrades to whatever
+      // the library already had rather than surfacing an error mid-playback.
+      break
+    }
+    if (!found.length) continue
+    await saveTracks(found, genre ?? query)
+    for (const t of found) {
+      if (picked.length >= limit) break
+      if (skip.has(t.videoId) || picked.some((p) => p.videoId === t.videoId)) continue
+      picked.push({ ...t, genre: genre ?? null })
+    }
+  }
+  return picked.slice(0, limit)
 }

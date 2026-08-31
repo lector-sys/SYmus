@@ -119,7 +119,12 @@ function GenreTag({ track }: { track: SavedTrack }): React.JSX.Element {
 
   async function set(genre: string | null): Promise<void> {
     try {
-      await window.api.lib.setGenre(track.videoId, genre)
+      const alsoTagged = await window.api.lib.setGenre(track.videoId, genre)
+      // Tagging one track tags the artist's other untagged tracks. Say so, or
+      // the library quietly changing underneath is unsettling.
+      if (alsoTagged) {
+        toast(`Tagged ${genre} — and ${alsoTagged} more by ${track.artist ?? 'this artist'}`)
+      }
       libraryChanged()
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err))

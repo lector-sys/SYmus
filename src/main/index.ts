@@ -9,6 +9,13 @@ import { search, resolve, audioUrl } from './youtube'
 import { registerStreamScheme, handleStreamProtocol } from './stream'
 import * as lib from './library'
 import { setupTray, setNowPlaying, beginQuit, isQuitting } from './tray'
+import { loadEnv } from './env'
+import { detectSource, configured, importPlaylist } from './import'
+import { registerSearchHistory } from './features/searchHistory'
+import { registerLyrics } from './features/lyrics'
+import { registerOffline } from './features/offline'
+import { registerExplore } from './features/explore'
+import { registerAlbums } from './features/albums'
 
 registerStreamScheme()
 // Media keys and queue advances have no user gesture behind them, and Chromium
@@ -91,6 +98,9 @@ async function start(): Promise<void> {
   electronApp.setAppUserModelId('com.madhusudan.symusplayer')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
+  const envFile = loadEnv()
+  if (envFile) console.log('[env] loaded', envFile)
+
   await migrate()
 
   if (process.argv.includes('--smoke')) {
@@ -157,6 +167,43 @@ async function start(): Promise<void> {
   ipcMain.handle('lib:setGenre', (_e, videoId, genre) =>
     lib.setGenre(VideoId.parse(videoId), Genre.parse(genre))
   )
+  ipcMain.handle('lib:similar', (_e, seed, exclude, limit) =>
+    lib.similarTo(
+      TrackShape.parse(seed),
+      z.array(VideoId).max(500).catch([]).parse(exclude),
+      Limit.parse(limit)
+    )
+  )
+  ipcMain.handle('lib:genreCoverage', () => lib.genreCoverage())
+  ipcMain.handle('lib:artists', (_e, limit) => lib.topArtists(Limit.parse(limit)))
+  ipcMain.handle('lib:byArtist', (_e, artist, limit) =>
+    lib.tracksByArtist(z.string().trim().min(1).max(300).parse(artist), Limit.parse(limit))
+  )
+
+  // Import. Progress is pushed on a channel rather than returned, because a
+  // 200-track Spotify import is minutes of YouTube lookups.
+  ipcMain.handle('import:detect', (_e, input) => {
+    const source = detectSource(String(input ?? '').slice(0, 2000))
+    return source ? { source, configured: configured(source) } : { source: null, configured: false }
+  })
+  ipcMain.handle('import:run', async (event, input) => {
+    const url = z.string().trim().min(1).max(2000).parse(input)
+    return importPlaylist(url, (progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('import:progress', progress)
+    })
+  })
+
+  // Feature slices own their own IPC. Each is the single place that feature
+  // touches the main process, so features can be built independently.
+  for (const register of [
+    registerSearchHistory,
+    registerLyrics,
+    registerOffline,
+    registerExplore,
+    registerAlbums
+  ]) {
+    register(ipcMain)
+  }
 
   const window = createWindow()
   setupTray(window, icon)

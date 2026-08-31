@@ -12,14 +12,60 @@ model Track {
   videoId      String   @unique
   title        String
   artist       String?
+  album        String? // grouped into album pages when present
   thumbnailUrl String?
   duration     Int // seconds; 0 = livestream/unknown
   genre        String? // free-text tag: inferred on add, editable in the UI
   addedAt      DateTime @default(now())
 
+  /// Absolute path under userData once the audio has been cached for offline use.
+  cachedPath  String?
+  cachedBytes Int?
+
   playlists PlaylistTrack[]
   like      Like?
+  dislike   Dislike?
   history   HistoryEntry[]
+  lyrics    Lyrics?
+
+  @@index([artist])
+  @@index([album])
+}
+
+/// Thumbs-down. Separate from the absence of a Like: "not for me" is a signal,
+/// "not rated" is not, and only the former should de-weight recommendations.
+model Dislike {
+  trackId    Int      @id
+  dislikedAt DateTime @default(now())
+
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+}
+
+/// Cached lyrics from LRCLIB. `synced` holds LRC timing when the API has it.
+model Lyrics {
+  trackId   Int      @id
+  plain     String?
+  synced    String?
+  fetchedAt DateTime @default(now())
+
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+}
+
+/// Recent searches, for the suggestion list under an empty search box.
+model SearchQuery {
+  id       Int      @id @default(autoincrement())
+  query    String   @unique
+  uses     Int      @default(1)
+  lastUsed DateTime @default(now())
+
+  @@index([lastUsed])
+}
+
+/// Everything on the Settings page. Values are JSON so a setting can be any
+/// shape without another migration.
+model Setting {
+  key   String @id
+  value String
 }
 
 model Playlist {
@@ -55,6 +101,8 @@ model HistoryEntry {
   id       Int      @id @default(autoincrement())
   trackId  Int
   playedAt DateTime @default(now())
+  /// True when the user skipped out early — a negative signal for recommendations.
+  skipped  Boolean  @default(false)
 
   track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
 

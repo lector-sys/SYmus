@@ -151,22 +151,64 @@ try {
   check('media keys registered', keys.length === 3, JSON.stringify(keys))
 
   // ---- seed a library varied enough for every Home row to have content ----
-  console.log('...searching YouTube for three genres (real network calls)')
+  console.log('...searching YouTube (real network calls)')
+  // Two searches whose text carries a genre word, and one that does not. The
+  // third is what real use looks like — "blinding lights", not "jazz piano" —
+  // and it is the case that left the real library 92% untagged.
   const seeded = await evalUI(`
     let total = 0
-    for (const q of ['lofi hip hop beats', 'jazz standards piano', 'classic rock anthems']) {
+    for (const q of ['lofi hip hop beats', 'jazz standards piano', 'blinding lights the weeknd']) {
       const r = await window.api.search(q)
       if (r.length) { await window.api.lib.save(r, q); total += r.length }
     }
     return total
   `)
-  check('seeded a multi-genre library', seeded > 20, `${seeded} tracks`)
+  check('seeded a library from real searches', seeded > 20, `${seeded} tracks`)
 
   const genres = await evalUI('return await window.api.lib.genres()')
   check(
-    'auto-tagged at least three genres',
-    genres.length >= 3,
+    'searches containing a genre word are auto-tagged',
+    genres.some((g) => g.genre === 'Lo-fi') && genres.some((g) => g.genre === 'Jazz'),
     JSON.stringify(genres.map((g) => g.genre))
+  )
+
+  // ---- the sparse-genre fallback -----------------------------------------
+  const coverage = await evalUI('return await window.api.lib.genreCoverage()')
+  check(
+    'a realistic search leaves tracks untagged',
+    coverage.tagged < coverage.total,
+    JSON.stringify(coverage)
+  )
+  const artists = await evalUI('return await window.api.lib.artists(16)')
+  check('artists are available as a fallback grouping', artists.length > 0, `${artists.length}`)
+
+  // ---- tagging one track tags the rest by that artist ---------------------
+  const spread = await evalUI(`
+    const all = await window.api.lib.recommended(1)
+    const untagged = (await window.api.lib.artists(16))
+      .map(a => a.artist)
+      .filter(Boolean)
+    // Pick an artist that has more than one untagged track.
+    for (const artist of untagged) {
+      const tracks = await window.api.lib.byArtist(artist, 20)
+      const blanks = tracks.filter(t => !t.genre)
+      if (blanks.length >= 2) {
+        const n = await window.api.lib.setGenre(blanks[0].videoId, 'R&B')
+        return { artist, tagged: n, blanks: blanks.length }
+      }
+    }
+    return { artist: null, tagged: 0, blanks: 0 }
+  `)
+  check(
+    'tagging one track tags the rest by that artist',
+    spread.tagged > 0,
+    JSON.stringify(spread)
+  )
+  const genresAfterTag = await evalUI('return await window.api.lib.genres()')
+  check(
+    'the new genre appears in Browse by genre',
+    genresAfterTag.some((g) => g.genre === 'R&B'),
+    JSON.stringify(genresAfterTag.map((g) => g.genre))
   )
 
   // Build a taste profile: like two jazz tracks, play some repeatedly. That is
@@ -212,6 +254,13 @@ try {
   ]) {
     check(`home row: ${row}`, rows.includes(row), JSON.stringify(rows))
   }
+  check(
+    'browse by genre shows real chips',
+    await evalUI(`
+      const h = [...document.querySelectorAll('h2')].find(x => x.textContent.trim().toLowerCase() === 'browse by genre')
+      return h ? h.closest('section').querySelectorAll('button').length > 0 : false
+    `)
+  )
   check(
     'home shelves are horizontally scrollable',
     await evalUI('return document.querySelectorAll(".no-scrollbar").length >= 3')
@@ -306,12 +355,195 @@ try {
     )
   )
   await shot('06-search-loading')
-  await sleep(14000)
-  check(
-    'search rendered results',
-    (await evalUI('return document.body.innerText.includes("RESULTS")')) === true
-  )
+  // Poll instead of sleeping a fixed span: this waits on a live YouTube query,
+  // and a hard-coded wait is flaky by construction.
+  let searched = false
+  for (let i = 0; i < 40 && !searched; i++) {
+    searched = await evalUI('return document.body.innerText.includes("RESULTS")')
+    if (!searched) await sleep(1000)
+  }
+  check('search rendered results', searched)
   await shot('07-search-results')
+
+  // ---- autoplay ----------------------------------------------------------
+  // Repeat must win: with repeat on, an empty queue is about to loop, not idle.
+  const repeatWins = await evalUI(`
+    const st = window.__store.getState()
+    st.setAutoplay(true)
+    st.playNow([])                       // nothing playing, empty queue
+    window.__store.setState({ repeat: 'all', history: [], sessionPlayed: new Set() })
+    const before = window.__store.getState()
+    await st.autoplayIfIdle()
+    const after = window.__store.getState()
+    window.__store.setState({ repeat: 'off' })
+    return { queued: after.queue.length, current: !!after.current, filling: after.filling }
+  `)
+  check(
+    'autoplay does not fire while repeat is on',
+    repeatWins.queued === 0 && !repeatWins.current,
+    JSON.stringify(repeatWins)
+  )
+
+  // A genuinely finished queue: repeat off, autoplay on, something in history.
+  const fired = await evalUI(`
+    const lofi = await window.api.lib.byGenre('Lo-fi', 3)
+    const st = window.__store.getState()
+    st.setAutoplay(true)
+    // Simulate a queue that has just run out, with one track behind it.
+    window.__store.setState({
+      current: null, queue: [], repeat: 'off',
+      history: [lofi[0]], sessionPlayed: new Set([lofi[0].videoId])
+    })
+    await window.__store.getState().autoplayIfIdle()
+    const s = window.__store.getState()
+    return {
+      current: s.current && { title: s.current.title, via: s.current.via },
+      queued: s.queue.length,
+      radioSeed: s.radioSeed,
+      servedSeedAgain: [s.current, ...s.queue].some(t => t && t.videoId === lofi[0].videoId)
+    }
+  `)
+  check('autoplay fills a finished queue', Boolean(fired.current) && fired.queued > 0, JSON.stringify(fired))
+  check(
+    'passive autoplay is not labelled a radio session',
+    fired.radioSeed === null,
+    JSON.stringify(fired.radioSeed)
+  )
+  check('autoplayed tracks carry their provenance', Boolean(fired.current?.via), JSON.stringify(fired.current))
+  check('autoplay never repeats a track from this session', fired.servedSeedAgain === false)
+
+  const label = await evalUI(`
+    return document.body.innerText.includes('Because you played')
+  `)
+  check('the queue labels autoplayed tracks', label)
+  await shot('08-autoplay')
+
+  // Turning it off must persist and stop it firing.
+  const off = await evalUI(`
+    const st = window.__store.getState()
+    st.setAutoplay(false)
+    window.__store.setState({ current: null, queue: [], repeat: 'off' })
+    await window.__store.getState().autoplayIfIdle()
+    const s = window.__store.getState()
+    return { stored: localStorage.getItem('symus.autoplay'), queued: s.queue.length, current: !!s.current }
+  `)
+  check(
+    'autoplay off is persisted and stops it firing',
+    off.stored === 'off' && off.queued === 0 && !off.current,
+    JSON.stringify(off)
+  )
+
+  // ---- radio -------------------------------------------------------------
+  const radio = await evalUI(`
+    const jazz = await window.api.lib.byGenre('Jazz', 3)
+    window.__store.setState({ sessionPlayed: new Set() })
+    await window.__store.getState().startRadio(jazz[0], jazz[0].title)
+    const s = window.__store.getState()
+    return { seed: s.radioSeed, current: s.current?.videoId, expected: jazz[0].videoId, queued: s.queue.length }
+  `)
+  check('radio starts from the seed track', radio.current === radio.expected, JSON.stringify(radio))
+  check('radio queues an onward session', radio.queued > 0, JSON.stringify(radio))
+  check('the queue header names the radio seed', await evalUI(
+    `return document.body.innerText.includes('Based on')`
+  ))
+  await shot('09-radio')
+
+  // ---- playlist import ---------------------------------------------------
+  await goTo('Import')
+  await sleep(500)
+
+  // An unconfigured source must explain itself, not fail at submit time.
+  const unconfigured = await evalUI(`
+    const i = document.querySelector('input[placeholder*="playlist link"]')
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(i, 'https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M')
+    i.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  `)
+  void unconfigured
+  await sleep(900)
+  const spotifyState = await evalUI(`
+    const d = await window.api.detectImport('https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M')
+    return {
+      detected: d.source,
+      configured: d.configured,
+      saysUnconfigured: document.body.innerText.includes('not configured'),
+      submitDisabled: document.querySelector('button[type=submit]')?.disabled
+    }
+  `)
+  check('detects a Spotify link', spotifyState.detected === 'spotify', JSON.stringify(spotifyState))
+  if (!spotifyState.configured) {
+    check(
+      'an unconfigured source says so instead of failing',
+      spotifyState.saysUnconfigured && spotifyState.submitDisabled === true,
+      JSON.stringify(spotifyState)
+    )
+  } else {
+    console.log('      (Spotify keys present — skipping the unconfigured-message check)')
+  }
+  await shot('10-import-unconfigured')
+
+  // A real YouTube playlist import, end to end.
+  const listsBefore = await evalUI('return (await window.api.lib.playlists()).length')
+  console.log('...importing a real YouTube playlist')
+  // A live third-party playlist. If it is ever removed the run says so plainly
+  // rather than reporting a fault in the importer.
+  const imported = await evalUI(`
+    const seen = []
+    try {
+      const res = await window.api.importPlaylist(
+        'https://www.youtube.com/playlist?list=PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI',
+        p => seen.push(p.stage)
+      )
+      return { ok: true, name: res.name, imported: res.imported, unmatched: res.unmatched.length, stages: [...new Set(seen)] }
+    } catch (err) {
+      return { ok: false, error: String(err && err.message || err) }
+    }
+  `)
+  if (!imported.ok) {
+    console.log('      SKIP: the test playlist is unavailable —', imported.error)
+  }
+  if (imported.ok) {
+    check('import created a playlist with tracks', imported.imported > 0, JSON.stringify(imported))
+    check(
+      'import reported progress',
+      imported.stages.includes('done'),
+      JSON.stringify(imported.stages)
+    )
+  }
+
+  if (imported.ok) {
+    const listsAfter = await evalUI('return (await window.api.lib.playlists()).length')
+    check(
+      'the imported playlist is in the library',
+      listsAfter === listsBefore + 1,
+      `${listsBefore} -> ${listsAfter}`
+    )
+
+    const contents = await evalUI(`
+      const lists = await window.api.lib.playlists()
+      const newest = lists.find(p => p.title === ${JSON.stringify('__NAME__')}) || lists[0]
+      const tracks = await window.api.lib.playlistTracks(newest.id)
+      return {
+        title: newest.title,
+        count: tracks.length,
+        allHaveIds: tracks.every(t => t.videoId),
+        firstThree: tracks.slice(0, 3).map(t => t.title.slice(0, 30))
+      }
+    `.replace('__NAME__', imported.name))
+    check(
+      'imported tracks are real library rows in playlist order',
+      contents.count > 0 && contents.allHaveIds,
+      JSON.stringify(contents)
+    )
+    check(
+      'the local playlist keeps the source name',
+      contents.title === imported.name,
+      `${contents.title} vs ${imported.name}`
+    )
+  }
+  await sleep(600)
+  await shot('11-import-done')
 
   // ---- media keys still drive the redesigned bar -------------------------
   const before = await evalUI('return window.__store.getState().current?.videoId')

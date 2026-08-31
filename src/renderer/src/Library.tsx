@@ -139,6 +139,23 @@ export function GenreView({ name }: { name: string }): React.JSX.Element {
   )
 }
 
+export function ArtistView({ name }: { name: string }): React.JSX.Element {
+  return (
+    <TrackListPage
+      cacheKey={`artist:${name}`}
+      title={name}
+      load={() => window.api.lib.byArtist(name, 100)}
+      empty={
+        <Empty
+          icon={Tag}
+          title={`Nothing by ${name}`}
+          hint="Search for this artist to pull their tracks into your library."
+        />
+      }
+    />
+  )
+}
+
 export function PlaylistView({ id, title }: { id: number; title: string }): React.JSX.Element {
   const { libraryChanged, toast } = usePlayer()
   return (

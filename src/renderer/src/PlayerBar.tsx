@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Heart,
+  Infinity as InfinityIcon,
   ListVideo,
   Pause,
   Play,
@@ -113,6 +114,8 @@ export default function PlayerBar({
           .play(track)
           .then(() => usePlayer.getState().libraryChanged())
           .catch(() => {})
+        // Session history is what stops autoplay serving the same track twice.
+        usePlayer.getState().notePlayed(track.videoId)
         el.src = window.api.streamUrl(track.videoId)
         // Rejects with AbortError whenever the next track replaces this src;
         // a genuine failure arrives on the element's error event instead.
@@ -178,6 +181,14 @@ export default function PlayerBar({
     navigator.mediaSession.playbackState = s.playing ? 'playing' : 'paused'
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.current, s.playing])
+
+  // The queue has run dry. Repeat is handled inside autoplayIfIdle, which is a
+  // no-op unless autoplay genuinely applies.
+  useEffect(() => {
+    if (s.current || s.queue.length) return
+    void s.autoplayIfIdle()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.current, s.queue.length])
 
   function seek(to: number): void {
     if (audio.current) audio.current.currentTime = to
@@ -308,6 +319,17 @@ export default function PlayerBar({
 
       {/* Right: output. */}
       <div className="flex w-[26%] items-center justify-end gap-1">
+        <button
+          onClick={() => s.setAutoplay(!s.autoplay)}
+          title={
+            s.autoplay
+              ? 'Autoplay on — keeps playing similar tracks when the queue ends'
+              : 'Autoplay off — playback stops when the queue ends'
+          }
+          className={`${icon} ${s.autoplay ? lit : idle}`}
+        >
+          <InfinityIcon size={17} />
+        </button>
         <button
           onClick={onToggleQueue}
           title={queueOpen ? 'Hide queue' : 'Show queue'}

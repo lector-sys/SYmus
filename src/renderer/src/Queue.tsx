@@ -1,17 +1,25 @@
 import { useState } from 'react'
-import { GripVertical, ListVideo, X } from 'lucide-react'
+import { GripVertical, Infinity as InfinityIcon, ListVideo, X } from 'lucide-react'
 import { fmt, usePlayer } from './store'
 import { Artwork, Empty, Equalizer, Eyebrow } from './ui'
 
 export default function Queue(): React.JSX.Element {
-  const { queue, current, playing, jumpTo, removeAt, move } = usePlayer()
+  const { queue, current, playing, jumpTo, removeAt, move, radioSeed, filling } = usePlayer()
   const [dragging, setDragging] = useState<number | null>(null)
   const [over, setOver] = useState<number | null>(null)
 
   return (
     <aside className="flex w-80 shrink-0 flex-col border-l border-line bg-panel">
       <div className="px-4 pt-4">
-        <Eyebrow>Queue</Eyebrow>
+        <Eyebrow>{radioSeed ? 'Radio' : 'Queue'}</Eyebrow>
+        {radioSeed && (
+          <p className="-mt-1 mb-3 flex items-center gap-1.5 text-xs text-ash">
+            <InfinityIcon size={12} className="shrink-0 text-ember" />
+            {/* truncate needs its own block; on the flex parent it does nothing
+                and the seed title runs off the panel. */}
+            <span className="min-w-0 truncate">Based on {radioSeed}</span>
+          </p>
+        )}
       </div>
 
       {current && (
@@ -67,6 +75,11 @@ export default function Queue(): React.JSX.Element {
               <span className="block truncate text-xs text-ash">
                 {t.artist ?? 'Unknown artist'}
               </span>
+              {t.via && (
+                <span className="mt-0.5 block truncate text-[11px] text-ember/80">
+                  Because you played {t.via}
+                </span>
+              )}
             </button>
             <span className="shrink-0 font-mono text-[11px] tabular-nums text-dust">
               {t.duration ? fmt(t.duration) : 'LIVE'}
@@ -80,13 +93,19 @@ export default function Queue(): React.JSX.Element {
             </button>
           </li>
         ))}
-        {!queue.length && (
-          <Empty
-            icon={ListVideo}
-            title="Queue is empty"
-            hint="Play a track, or use Add to queue on any row to line one up next."
-          />
-        )}
+        {!queue.length &&
+          (filling ? (
+            <p className="flex items-center justify-center gap-2 px-4 py-10 text-xs text-ash">
+              <InfinityIcon size={13} className="text-ember" />
+              Finding similar tracks…
+            </p>
+          ) : (
+            <Empty
+              icon={ListVideo}
+              title="Queue is empty"
+              hint="Play a track, or use Add to queue on any row to line one up next."
+            />
+          ))}
       </ol>
     </aside>
   )
