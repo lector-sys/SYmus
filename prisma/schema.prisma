@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/main/db/generated"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Track {
+  id           Int      @id @default(autoincrement())
+  videoId      String   @unique
+  title        String
+  artist       String?
+  thumbnailUrl String?
+  duration     Int // seconds; 0 = livestream/unknown
+  addedAt      DateTime @default(now())
+
+  playlists PlaylistTrack[]
+  like      Like?
+  history   HistoryEntry[]
+}
+
+model Playlist {
+  id        Int      @id @default(autoincrement())
+  title     String
+  coverUrl  String?
+  createdAt DateTime @default(now())
+
+  tracks PlaylistTrack[]
+}
+
+model PlaylistTrack {
+  playlistId Int
+  trackId    Int
+  position   Int
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  track    Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@id([playlistId, trackId])
+  @@index([playlistId, position])
+}
+
+model Like {
+  trackId Int      @id
+  likedAt DateTime @default(now())
+
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+}
+
+model HistoryEntry {
+  id       Int      @id @default(autoincrement())
+  trackId  Int
+  playedAt DateTime @default(now())
+
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@index([playedAt])
+}
