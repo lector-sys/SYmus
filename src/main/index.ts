@@ -2,8 +2,16 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { z } from 'zod'
 import icon from '../../resources/icon.png?asset'
 import { prisma, migrate } from './db'
+import { search, resolve, audioUrl } from './youtube'
+import { registerStreamScheme, handleStreamProtocol } from './stream'
+
+registerStreamScheme()
+// Media keys and queue advances have no user gesture behind them, and Chromium
+// would otherwise refuse to start playback.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -35,17 +43,29 @@ function createWindow(): void {
   }
 }
 
+// Everything crossing the IPC boundary is untrusted until it has been through here.
+const Query = z.string().trim().min(1).max(500)
+const VideoId = z.string().regex(/^[\w-]{11}$/)
+
 async function start(): Promise<void> {
   electronApp.setAppUserModelId('com.symus.desktop')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
   await migrate()
+  handleStreamProtocol()
 
   ipcMain.handle('db:stats', async () => ({
     tracks: await prisma.track.count(),
     playlists: await prisma.playlist.count(),
     likes: await prisma.like.count()
   }))
+  ipcMain.handle('yt:search', (_e, query) => search(Query.parse(query)))
+  ipcMain.handle('yt:resolve', (_e, input) => resolve(Query.parse(input)))
+  // <audio> only ever reports "this source failed". Resolving up front gets the real
+  // reason ("age-restricted", "private", ...) and warms the cache the protocol reads.
+  ipcMain.handle('yt:prepare', async (_e, videoId) => {
+    await audioUrl(VideoId.parse(videoId))
+  })
 
   createWindow()
 

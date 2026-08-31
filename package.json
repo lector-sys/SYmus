@@ -19,13 +19,15 @@
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
     "db:migrate": "prisma migrate dev",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "@prisma/adapter-better-sqlite3": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "better-sqlite3": "^12.11.1",
+    "youtube-dl-exec": "^3.1.13",
     "zod": "^4.5.4",
     "zustand": "^5.0.15"
   },
@@ -59,6 +61,7 @@
     "esbuild@0.25.12": true,
     "electron@39.8.10": true,
     "@prisma/engines@7.10.0": true,
-    "prisma@7.10.0": true
+    "prisma@7.10.0": true,
+    "youtube-dl-exec@3.1.13": true
   }
 }
