@@ -1,23 +1,31 @@
 import { useState } from 'react'
-import { GripVertical, X } from 'lucide-react'
+import { GripVertical, ListVideo, X } from 'lucide-react'
 import { fmt, usePlayer } from './store'
+import { Artwork, Empty, Equalizer, Eyebrow } from './ui'
 
 export default function Queue(): React.JSX.Element {
-  const { queue, current, jumpTo, removeAt, move } = usePlayer()
+  const { queue, current, playing, jumpTo, removeAt, move } = usePlayer()
   const [dragging, setDragging] = useState<number | null>(null)
+  const [over, setOver] = useState<number | null>(null)
 
   return (
-    <aside className="flex w-80 flex-col border-l border-zinc-800 bg-zinc-900/40">
-      <h2 className="border-b border-zinc-800 px-4 py-3 text-sm font-semibold">Queue</h2>
+    <aside className="flex w-80 shrink-0 flex-col border-l border-line bg-panel">
+      <div className="px-4 pt-4">
+        <Eyebrow>Queue</Eyebrow>
+      </div>
 
       {current && (
-        <div className="border-b border-zinc-800 px-4 py-3">
-          <p className="text-xs uppercase tracking-wide text-zinc-500">Now playing</p>
-          <p className="mt-1 truncate text-sm text-green-400">{current.title}</p>
+        <div className="mx-3 mb-2 flex items-center gap-3 rounded-lg bg-ember/[0.07] p-2.5">
+          <Artwork src={current.thumbnailUrl} size="sm" rounded="rounded-md" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13px] font-medium text-ember">{current.title}</p>
+            <p className="truncate text-xs text-ash">{current.artist ?? 'Unknown artist'}</p>
+          </div>
+          <Equalizer playing={playing} />
         </div>
       )}
 
-      <ol className="flex-1 overflow-y-auto p-2">
+      <ol className="flex-1 overflow-y-auto px-2 pb-3">
         {queue.map((t, i) => (
           <li
             key={`${t.videoId}-${i}`}
@@ -28,36 +36,57 @@ export default function Queue(): React.JSX.Element {
               e.dataTransfer.setData('text/plain', String(i))
               setDragging(i)
             }}
-            onDragEnd={() => setDragging(null)}
-            onDragOver={(e) => e.preventDefault()}
+            onDragEnd={() => {
+              setDragging(null)
+              setOver(null)
+            }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setOver(i)
+            }}
             onDrop={(e) => {
               e.preventDefault()
               const from = Number(e.dataTransfer.getData('text/plain'))
               if (Number.isInteger(from) && from !== i) move(from, i)
               setDragging(null)
+              setOver(null)
             }}
-            className={`group flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800 ${
-              dragging === i ? 'opacity-40' : ''
-            }`}
+            className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-150 ${
+              dragging === i ? 'opacity-30' : 'hover:bg-lifted'
+            } ${over === i && dragging !== i ? 'ring-1 ring-ember/40' : ''}`}
           >
-            <GripVertical size={14} className="shrink-0 cursor-grab text-zinc-600" />
+            <GripVertical
+              size={13}
+              className="shrink-0 cursor-grab text-dust opacity-0 group-hover:opacity-100"
+            />
+            <span className="w-4 shrink-0 text-center font-mono text-[11px] text-dust group-hover:hidden">
+              {i + 1}
+            </span>
             <button onClick={() => jumpTo(i)} className="min-w-0 flex-1 text-left">
-              <span className="block truncate text-sm">{t.title}</span>
-              <span className="block truncate text-xs text-zinc-500">{t.artist}</span>
+              <span className="block truncate text-[13px]">{t.title}</span>
+              <span className="block truncate text-xs text-ash">
+                {t.artist ?? 'Unknown artist'}
+              </span>
             </button>
-            <span className="shrink-0 text-xs tabular-nums text-zinc-600">
-              {t.duration ? fmt(t.duration) : 'live'}
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-dust">
+              {t.duration ? fmt(t.duration) : 'LIVE'}
             </span>
             <button
               onClick={() => removeAt(i)}
-              title="Remove"
-              className="shrink-0 text-zinc-600 opacity-0 hover:text-zinc-200 group-hover:opacity-100"
+              title="Remove from queue"
+              className="shrink-0 text-dust opacity-0 transition-colors hover:text-chalk group-hover:opacity-100"
             >
-              <X size={14} />
+              <X size={13} />
             </button>
           </li>
         ))}
-        {!queue.length && <li className="px-2 py-3 text-sm text-zinc-600">Nothing queued</li>}
+        {!queue.length && (
+          <Empty
+            icon={ListVideo}
+            title="Queue is empty"
+            hint="Play a track, or use Add to queue on any row to line one up next."
+          />
+        )}
       </ol>
     </aside>
   )

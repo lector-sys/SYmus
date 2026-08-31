@@ -14,6 +14,7 @@ model Track {
   artist       String?
   thumbnailUrl String?
   duration     Int // seconds; 0 = livestream/unknown
+  genre        String? // free-text tag: inferred on add, editable in the UI
   addedAt      DateTime @default(now())
 
   playlists PlaylistTrack[]
@@ -25,6 +26,7 @@ model Playlist {
   id        Int      @id @default(autoincrement())
   title     String
   coverUrl  String?
+  genre     String?
   createdAt DateTime @default(now())
 
   tracks PlaylistTrack[]

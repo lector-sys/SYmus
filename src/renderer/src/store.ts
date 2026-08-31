@@ -30,6 +30,11 @@ interface Player {
   repeat: Repeat
   toasts: Toast[]
 
+  /** videoIds of liked tracks. A Set so every row can ask in O(1) while rendering. */
+  liked: Set<string>
+  /** Bumped on every write to the library, so views know to refetch. */
+  libraryVersion: number
+
   playNow: (tracks: Track[], index?: number) => void
   addToQueue: (tracks: Track[]) => void
   playNext: (tracks: Track[]) => void
@@ -44,6 +49,11 @@ interface Player {
   toggleShuffle: () => void
   cycleRepeat: () => void
   toast: (message: string) => void
+
+  refreshLikes: () => Promise<void>
+  toggleLike: (track: Track) => Promise<void>
+  /** Call after any library mutation made outside the store, so views refetch. */
+  libraryChanged: () => void
 }
 
 let toastId = 0
@@ -58,6 +68,8 @@ export const usePlayer = create<Player>((set, get) => ({
   shuffle: false,
   repeat: 'off',
   toasts: [],
+  liked: new Set<string>(),
+  libraryVersion: 0,
 
   playNow: (tracks, index = 0) =>
     set((s) => ({
@@ -141,5 +153,54 @@ export const usePlayer = create<Player>((set, get) => ({
     const id = ++toastId
     set((s) => ({ toasts: [...s.toasts, { id, message }] }))
     setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 6000)
+  },
+
+  libraryChanged: () => set((s) => ({ libraryVersion: s.libraryVersion + 1 })),
+
+  refreshLikes: async () => {
+    const likes = await window.api.lib.likes()
+    set({ liked: new Set(likes.map((t) => t.videoId)) })
+  },
+
+  /**
+   * Optimistic: the heart fills immediately and rolls back if the write fails.
+   * A round trip before the icon moves makes the whole app feel laggy.
+   */
+  toggleLike: async (track) => {
+    const s = get()
+    const next = !s.liked.has(track.videoId)
+    const optimistic = new Set(s.liked)
+    if (next) optimistic.add(track.videoId)
+    else optimistic.delete(track.videoId)
+    set({ liked: optimistic })
+    try {
+      await window.api.lib.like(track, next)
+      get().libraryChanged()
+    } catch (err) {
+      set({ liked: s.liked })
+      get().toast(err instanceof Error ? err.message : String(err))
+    }
   }
+}))
+
+/**
+ * Which page the main pane is showing. A four-line union beats a router: this
+ * app has no URLs, no deep links and no back button to keep in sync.
+ */
+export type View =
+  | { kind: 'home' }
+  | { kind: 'search' }
+  | { kind: 'library' }
+  | { kind: 'liked' }
+  | { kind: 'playlist'; id: number; title: string }
+  | { kind: 'genre'; name: string }
+
+interface Nav {
+  view: View
+  go: (view: View) => void
+}
+
+export const useNav = create<Nav>((set) => ({
+  view: { kind: 'home' },
+  go: (view) => set({ view })
 }))

@@ -1,9 +1,11 @@
 {
   "name": "symus-desktop",
   "version": "1.0.0",
-  "description": "Personal desktop music player",
+  "description": "Desktop music player for YouTube, with local playlists, likes and history",
   "main": "./out/main/index.js",
-  "author": "meyaa",
+  "author": {
+    "name": "Madhusudan"
+  },
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -20,7 +22,10 @@
     "build:linux": "electron-vite build && electron-builder --linux",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "smoke": "electron-vite build && node scripts/smoke.mjs",
+    "drive": "electron-vite build && node scripts/drive.mjs",
+    "icons": "electron scripts/make-icon.cjs"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",

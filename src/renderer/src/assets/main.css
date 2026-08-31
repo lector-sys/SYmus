@@ -1,1 +1,186 @@
-@import "tailwindcss";
+@import 'tailwindcss';
+
+/*
+  SYmuS design tokens.
+
+  The greyscale is deliberately WARM (#0a0908 → #2a2724), not Tailwind's cool
+  zinc/slate. Ember is a filament colour; on a blue-grey base it reads as an
+  alert, on a warm base it reads as light. That one substitution is what keeps
+  this from looking like every other dark Tailwind app.
+
+  Ember is rationed. It means exactly two things and nothing else:
+  "this is playing" and "this is the primary action". Everything else in the
+  interface is unlit. In a music player the most important state is what is
+  currently playing, so the whole accent budget is spent making that
+  unmistakable at a glance.
+*/
+@theme {
+  --color-ink: #0a0908;
+  --color-panel: #121110;
+  --color-raised: #1c1a18;
+  --color-lifted: #24211e;
+  --color-line: #2a2724;
+  --color-ember: #ff7a45;
+  --color-flare: #ffb865;
+  --color-chalk: #f5f1ec;
+  --color-ash: #8c857d;
+  --color-dust: #5d564f;
+
+  --font-sans:
+    'Segoe UI Variable Display', 'Segoe UI', -apple-system, system-ui, 'Helvetica Neue', sans-serif;
+  /* Every number in this app is a measurement — timecodes, play counts, queue
+     positions. They get a monospace face so columns line up and so they read as
+     data rather than prose. */
+  --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background: var(--color-ink);
+    color: var(--color-chalk);
+    font-family: var(--font-sans);
+    /* A desktop chrome, not a document: nothing here should be selectable
+       except where text is genuinely content. */
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  input {
+    user-select: text;
+  }
+
+  /* Keyboard focus stays visible everywhere; the mouse never sees it. */
+  :focus-visible {
+    outline: 2px solid var(--color-ember);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-dust);
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  /* Horizontal card rows scroll, but a visible bar under every row would saw
+     the page into stripes. The rows have arrow buttons instead. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ash);
+  }
+
+  /* The signature: warm light behind whatever is playing. */
+  .bloom {
+    background: radial-gradient(circle, rgb(255 122 69 / 0.55) 0%, transparent 70%);
+    animation: bloom 3.2s ease-in-out infinite;
+  }
+
+  /* No `both` fill mode on purpose. With it, the element holds the keyframe's
+     opacity:0 start state, so any frame where the animation does not run —
+     an occluded window, a background workspace, a throttled renderer — leaves
+     the page invisible. Without it the resting style is the visible one and the
+     animation is pure garnish. */
+  .view-enter {
+    animation: rise 220ms var(--ease-out-soft);
+  }
+
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+    background: var(--color-raised);
+  }
+  .shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.045), transparent);
+    animation: shimmer 1.6s infinite;
+  }
+}
+
+/*
+  Transform only — deliberately no opacity fade.
+
+  A CSS animation in an occluded or minimised window stalls on its first frame.
+  Had this faded from opacity 0, the pane would sit fully invisible until the
+  window was shown again. A stalled translate leaves the content readable, just
+  eight pixels low, so the motion can never cost visibility.
+*/
+@keyframes rise {
+  from {
+    transform: translateY(8px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes bloom {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* The three bars of the app icon, alive. */
+@keyframes eq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

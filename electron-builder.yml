@@ -1,11 +1,14 @@
-appId: com.symus.desktop
+appId: com.madhusudan.symusplayer
 productName: SYmuS
+copyright: Copyright © 2026 Madhusudan
 directories:
   buildResources: build
+  output: dist
 files:
   - '!**/.vscode/*'
   - '!src/*'
   - '!prisma/*'
+  - '!scripts/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!prisma.config.ts'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,CHANGELOG.md,README.md}'
@@ -14,23 +17,66 @@ files:
 asarUnpack:
   - resources/**
   - '**/*.node'
+  # yt-dlp is spawned as a child process and cannot be executed from inside the asar.
   - '**/yt-dlp*'
+
+# .ico and .icns are derived from build/icon.png at package time, so there is one
+# source of truth for the artwork (build/icon.svg -> `npm run icons`).
 win:
-  executableName: symus-desktop
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  executableName: SYmuS
+
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+  # An assisted (not one-click) installer, so the desktop shortcut is the user's
+  # choice rather than something the installer decides for them.
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Per-user install: no UAC prompt, and no admin rights needed to update it.
+  perMachine: false
+  createStartMenuShortcut: true
+  createDesktopShortcut: true
+  # false puts the shortcut at the top level of the Start Menu rather than inside
+  # a "SYmuS" folder — that is what makes Start-menu search find it by name.
+  menuCategory: false
+  shortcutName: SYmuS
+  uninstallDisplayName: SYmuS
+  runAfterFinish: true
+
 mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  icon: build/icon.png
+  category: public.app-category.music
   entitlementsInherit: build/entitlements.mac.plist
+  # No Developer ID for a personal build. electron-builder falls back to an
+  # ad-hoc signature, which is what Apple Silicon needs in order to launch at all.
+  identity: null
   notarize: false
+
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
+
 linux:
   target:
     - AppImage
-  maintainer: symus
+  icon: build/icons
+  maintainer: Madhusudan
   category: AudioVideo
+  synopsis: Desktop music player
+  description: Search, queue and play music from YouTube, with playlists, likes and history stored locally.
+  desktop:
+    entry:
+      # Categories is what puts SYmuS under Sound & Video in the app launcher.
+      Categories: AudioVideo;Player;Music;
+      Keywords: music;player;audio;youtube;stream;
+      # Must match the window class or the launcher shows a second, generic icon
+      # for the running app instead of pinning it to this entry.
+      StartupWMClass: SYmuS
+
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Heart,
+  ListVideo,
   Pause,
   Play,
   Repeat,
@@ -7,18 +9,83 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Volume1,
   Volume2,
   VolumeX
 } from 'lucide-react'
 import { fmt, usePlayer } from './store'
+import { Artwork } from './ui'
 
-// Both halves must set the colour: a base `text-zinc-400` here would fight
-// `text-green-400` on a rule the stylesheet order decides, not the class list.
-const btn = 'rounded-full p-2 disabled:opacity-30'
-const idle = 'text-zinc-400 hover:text-zinc-100'
-const active = 'text-green-400 hover:text-green-300'
+const icon = 'flex h-8 w-8 items-center justify-center rounded-full transition-colors duration-150'
+const idle = 'text-ash hover:text-chalk'
+const lit = 'text-ember hover:text-flare'
 
-export default function PlayerBar(): React.JSX.Element {
+/**
+ * Track scrubber. `value` follows playback until a drag starts, then the drag
+ * owns the handle — otherwise the next timeupdate yanks it back under the cursor
+ * mid-gesture.
+ */
+function Scrubber({
+  value,
+  max,
+  onSeek,
+  disabled
+}: {
+  value: number
+  max: number
+  onSeek: (to: number) => void
+  disabled?: boolean
+}): React.JSX.Element {
+  const [dragging, setDragging] = useState<number | null>(null)
+  const shown = dragging ?? value
+  const pct = max > 0 ? Math.min(100, (shown / max) * 100) : 0
+
+  const commit = (): void => {
+    if (dragging !== null) onSeek(dragging)
+    setDragging(null)
+  }
+
+  return (
+    <div className="group/bar relative flex h-3 w-full items-center">
+      <div className="h-1 w-full overflow-hidden rounded-full bg-lifted">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-flare to-ember"
+          style={{
+            width: `${pct}%`,
+            transition: dragging === null ? 'width 220ms linear' : 'none'
+          }}
+        />
+      </div>
+      <span
+        aria-hidden
+        className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 rounded-full bg-chalk opacity-0 shadow transition-opacity duration-150 group-hover/bar:opacity-100"
+        style={{ left: `${pct}%` }}
+      />
+      <input
+        type="range"
+        min={0}
+        max={max || 0}
+        step={0.25}
+        value={shown}
+        disabled={disabled}
+        aria-label="Seek"
+        onChange={(e) => setDragging(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+      />
+    </div>
+  )
+}
+
+export default function PlayerBar({
+  onToggleQueue,
+  queueOpen
+}: {
+  onToggleQueue: () => void
+  queueOpen: boolean
+}): React.JSX.Element {
   const audio = useRef<HTMLAudioElement>(null)
   const [position, setPosition] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -40,6 +107,12 @@ export default function PlayerBar(): React.JSX.Element {
       .prepare(track.videoId)
       .then(() => {
         if (stale) return
+        // Recorded only once the stream resolved: a track that never played is
+        // not something the user listened to, and must not skew the history.
+        window.api.lib
+          .play(track)
+          .then(() => usePlayer.getState().libraryChanged())
+          .catch(() => {})
         el.src = window.api.streamUrl(track.videoId)
         // Rejects with AbortError whenever the next track replaces this src;
         // a genuine failure arrives on the element's error event instead.
@@ -47,7 +120,7 @@ export default function PlayerBar(): React.JSX.Element {
       })
       .catch((err: unknown) => {
         if (stale) return
-        s.toast(`Skipping "${track.title}" — ${err instanceof Error ? err.message : err}`)
+        s.toast(`Skipped "${track.title}" — ${err instanceof Error ? err.message : err}`)
         s.next(true)
       })
     return () => {
@@ -70,20 +143,53 @@ export default function PlayerBar(): React.JSX.Element {
     el.muted = s.muted
   }, [s.volume, s.muted])
 
+  // Media keys and tray clicks. Registered once and reading the store directly,
+  // so the subscription does not churn on every render.
+  useEffect(
+    () =>
+      window.api.onMedia((command) => {
+        const p = usePlayer.getState()
+        if (command === 'playpause') p.setPlaying(!p.playing)
+        else if (command === 'next') p.next()
+        else if (command === 'stop') p.setPlaying(false)
+        else if (command === 'previous' && !p.previous() && audio.current) {
+          audio.current.currentTime = 0
+        }
+      }),
+    []
+  )
+
+  // The tray menu and the OS media overlay are the two places playback shows up
+  // outside the window; both are fed from here.
+  useEffect(() => {
+    window.api.setNowPlaying({
+      title: s.current?.title ?? null,
+      artist: s.current?.artist ?? null,
+      playing: s.playing
+    })
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.metadata = s.current
+      ? new MediaMetadata({
+          title: s.current.title,
+          artist: s.current.artist ?? '',
+          artwork: s.current.thumbnailUrl ? [{ src: s.current.thumbnailUrl }] : []
+        })
+      : null
+    navigator.mediaSession.playbackState = s.playing ? 'playing' : 'paused'
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.current, s.playing])
+
   function seek(to: number): void {
     if (audio.current) audio.current.currentTime = to
     setPosition(to)
   }
 
-  /** Every player restarts the track when there is nothing behind it. */
-  function previous(): void {
-    if (!s.previous()) seek(0)
-  }
-
   const RepeatIcon = s.repeat === 'one' ? Repeat1 : Repeat
+  const VolumeIcon = s.muted || s.volume === 0 ? VolumeX : s.volume < 0.5 ? Volume1 : Volume2
+  const liked = s.current ? s.liked.has(s.current.videoId) : false
 
   return (
-    <footer className="flex h-20 items-center gap-4 border-t border-zinc-800 bg-zinc-900/60 px-4">
+    <footer className="relative z-20 flex h-[76px] shrink-0 items-center gap-6 border-t border-line bg-panel px-4">
       <audio
         ref={audio}
         onLoadStart={() => {
@@ -101,100 +207,135 @@ export default function PlayerBar(): React.JSX.Element {
         }}
         onError={() => {
           if (!s.current) return
-          s.toast(`Skipping "${s.current.title}" — playback failed`)
+          s.toast(`Skipped "${s.current.title}" — playback failed`)
           s.next(true)
         }}
       />
 
-      <div className="flex w-64 min-w-0 items-center gap-3">
-        {s.current && (
+      {/* Left: what is playing. The bloom behind the artwork is the app's one
+          piece of decoration, and it exists only while sound is coming out. */}
+      <div className="flex w-[26%] min-w-0 items-center gap-3">
+        {s.current ? (
           <>
-            <img src={s.current.thumbnailUrl} alt="" className="h-12 w-12 rounded object-cover" />
-            <div className="min-w-0">
-              <p className="truncate text-sm">{s.current.title}</p>
-              <p className="truncate text-xs text-zinc-500">{s.current.artist}</p>
+            <div className="relative shrink-0">
+              {s.playing && (
+                <span aria-hidden className="bloom absolute -inset-3 rounded-full blur-md" />
+              )}
+              <div className="relative">
+                <Artwork src={s.current.thumbnailUrl} size="md" rounded="rounded-md" />
+              </div>
             </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-medium">{s.current.title}</p>
+              <p className="truncate text-xs text-ash">{s.current.artist ?? 'Unknown artist'}</p>
+            </div>
+            <button
+              onClick={() => s.current && s.toggleLike(s.current)}
+              title={liked ? 'Remove from liked songs' : 'Add to liked songs'}
+              className={`${icon} shrink-0 ${liked ? lit : idle}`}
+            >
+              <Heart size={16} fill={liked ? 'currentColor' : 'none'} />
+            </button>
           </>
+        ) : (
+          <p className="text-xs text-dust">Nothing playing</p>
         )}
       </div>
 
-      <div className="flex flex-1 flex-col items-center gap-1">
-        <div className="flex items-center gap-1">
+      {/* Centre: transport. */}
+      <div className="flex flex-1 flex-col items-center gap-1.5">
+        <div className="flex items-center gap-2">
           <button
-            className={`${btn} ${s.shuffle ? active : idle}`}
+            className={`${icon} ${s.shuffle ? lit : idle}`}
             onClick={s.toggleShuffle}
-            title="Shuffle"
+            title={s.shuffle ? 'Shuffle on' : 'Shuffle off'}
           >
-            <Shuffle size={16} />
+            <Shuffle size={15} />
           </button>
           <button
-            className={`${btn} ${idle}`}
-            onClick={previous}
+            className={`${icon} ${idle} disabled:opacity-30`}
+            onClick={() => {
+              if (!s.previous()) seek(0)
+            }}
             disabled={!s.current}
             title="Previous"
           >
-            <SkipBack size={18} fill="currentColor" />
+            <SkipBack size={17} fill="currentColor" />
           </button>
           <button
-            className="rounded-full bg-zinc-100 p-2 text-zinc-900 disabled:opacity-30"
             onClick={() => s.setPlaying(!s.playing)}
             disabled={!s.current}
             title={s.playing ? 'Pause' : 'Play'}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-chalk text-ink transition-transform duration-150 ease-[cubic-bezier(.22,1,.36,1)] hover:scale-105 active:scale-95 disabled:scale-100 disabled:opacity-25"
           >
             {s.playing ? (
-              <Pause size={18} fill="currentColor" />
+              <Pause size={17} fill="currentColor" />
             ) : (
-              <Play size={18} fill="currentColor" />
+              <Play size={17} fill="currentColor" className="ml-[2px]" />
             )}
           </button>
           <button
-            className={`${btn} ${idle}`}
+            className={`${icon} ${idle} disabled:opacity-30`}
             onClick={() => s.next()}
             disabled={!s.current && !s.queue.length}
             title="Next"
           >
-            <SkipForward size={18} fill="currentColor" />
+            <SkipForward size={17} fill="currentColor" />
           </button>
           <button
-            className={`${btn} ${s.repeat !== 'off' ? active : idle}`}
+            className={`${icon} ${s.repeat !== 'off' ? lit : idle}`}
             onClick={s.cycleRepeat}
-            title={`Repeat: ${s.repeat}`}
+            title={
+              s.repeat === 'off'
+                ? 'Repeat off'
+                : s.repeat === 'all'
+                  ? 'Repeat queue'
+                  : 'Repeat this track'
+            }
           >
-            <RepeatIcon size={16} />
+            <RepeatIcon size={15} />
           </button>
         </div>
 
-        <div className="flex w-full max-w-xl items-center gap-2">
-          <span className="w-10 text-right text-xs tabular-nums text-zinc-500">
+        <div className="flex w-full max-w-2xl items-center gap-3">
+          <span className="w-9 text-right font-mono text-[11px] tabular-nums text-ash">
             {fmt(position)}
           </span>
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step={0.5}
-            value={position}
-            onChange={(e) => seek(Number(e.target.value))}
-            disabled={!duration}
-            className="h-1 flex-1 accent-zinc-100"
-          />
-          <span className="w-10 text-xs tabular-nums text-zinc-500">{fmt(duration)}</span>
+          <Scrubber value={position} max={duration} onSeek={seek} disabled={!duration} />
+          <span className="w-9 font-mono text-[11px] tabular-nums text-ash">{fmt(duration)}</span>
         </div>
       </div>
 
-      <div className="flex w-64 items-center justify-end gap-2">
-        <button className={`${btn} ${idle}`} onClick={s.toggleMute} title="Mute">
-          {s.muted || s.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+      {/* Right: output. */}
+      <div className="flex w-[26%] items-center justify-end gap-1">
+        <button
+          onClick={onToggleQueue}
+          title={queueOpen ? 'Hide queue' : 'Show queue'}
+          className={`${icon} ${queueOpen ? 'text-chalk' : idle}`}
+        >
+          <ListVideo size={16} />
         </button>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={s.muted ? 0 : s.volume}
-          onChange={(e) => s.setVolume(Number(e.target.value))}
-          className="h-1 w-24 accent-zinc-100"
-        />
+        <button className={`${icon} ${idle}`} onClick={s.toggleMute} title="Mute">
+          <VolumeIcon size={16} />
+        </button>
+        <div className="group/vol relative flex h-3 w-24 items-center">
+          <div className="h-1 w-full overflow-hidden rounded-full bg-lifted">
+            <div
+              className="h-full rounded-full bg-ash transition-colors group-hover/vol:bg-chalk"
+              style={{ width: `${(s.muted ? 0 : s.volume) * 100}%` }}
+            />
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={s.muted ? 0 : s.volume}
+            aria-label="Volume"
+            onChange={(e) => s.setVolume(Number(e.target.value))}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          />
+        </div>
       </div>
     </footer>
   )

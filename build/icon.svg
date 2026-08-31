@@ -1,0 +1,62 @@
+<!--
+  SYmuS app icon — the single source for every platform's icon.
+
+  To use your own artwork: replace this file with a 1024x1024 square SVG and run
+  `npm run icons`. That regenerates build/icon.png, the build/icons/ PNG set for
+  Linux, and resources/icon.png (window + tray). electron-builder derives the
+  Windows .ico and macOS .icns from build/icon.png at package time.
+
+  Kept deliberately simple: three equalizer bars still read as "music" at the
+  16x16 the Windows tray and taskbar draw it at.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0%" stop-color="#241a14" />
+      <stop offset="55%" stop-color="#12100f" />
+      <stop offset="100%" stop-color="#0a0908" />
+    </linearGradient>
+
+    <linearGradient id="bar" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0%" stop-color="#ffc46b" />
+      <stop offset="45%" stop-color="#ff8a3d" />
+      <stop offset="100%" stop-color="#ff5c39" />
+    </linearGradient>
+
+    <!-- Warm bloom behind the bars, so the mark has depth instead of sitting flat. -->
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#ff7a45" stop-opacity="0.38" />
+      <stop offset="100%" stop-color="#ff7a45" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- One-pixel top edge of light: the standard trick that keeps a dark icon
+         from disappearing into a dark dock or taskbar. -->
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.16" />
+      <stop offset="35%" stop-color="#ffffff" stop-opacity="0.03" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)" />
+  <rect width="1024" height="1024" rx="228" fill="url(#rim)" />
+  <circle cx="512" cy="512" r="430" fill="url(#glow)" />
+
+  <g fill="url(#bar)">
+    <rect x="256" y="362" width="120" height="300" rx="60" />
+    <rect x="452" y="262" width="120" height="500" rx="60" />
+    <rect x="648" y="322" width="120" height="380" rx="60" />
+  </g>
+
+  <rect
+    x="6"
+    y="6"
+    width="1012"
+    height="1012"
+    rx="222"
+    fill="none"
+    stroke="#ffffff"
+    stroke-opacity="0.07"
+    stroke-width="3"
+  />
+</svg>

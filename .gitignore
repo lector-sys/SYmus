@@ -11,3 +11,4 @@ prisma/dev.db*
 
 # generated prisma client
 src/main/db/generated/
+shots
