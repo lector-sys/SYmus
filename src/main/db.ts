@@ -26,7 +26,10 @@ export async function migrate(): Promise<void> {
     if (done.has(name)) continue
     // ponytail: naive `;` split. Fine for Prisma-generated DDL, which never puts a
     // semicolon inside a literal. Swap in a real splitter if we hand-write migrations.
-    for (const stmt of migrations[path].split(';').map((s) => s.trim()).filter(Boolean)) {
+    for (const stmt of migrations[path]
+      .split(';')
+      .map((s) => s.trim())
+      .filter(Boolean)) {
       await prisma.$executeRawUnsafe(stmt)
     }
     await prisma.$executeRawUnsafe('INSERT INTO _migrations (name) VALUES (?)', name)

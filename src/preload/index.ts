@@ -17,7 +17,8 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 const api = {
   dbStats: () => invoke<{ tracks: number; playlists: number; likes: number }>('db:stats'),
   search: (query: string) => invoke<Track[]>('yt:search', query),
-  resolveUrl: (input: string) => invoke<{ name: string | null; tracks: Track[] }>('yt:resolve', input),
+  resolveUrl: (input: string) =>
+    invoke<{ name: string | null; tracks: Track[] }>('yt:resolve', input),
   /** Resolves the stream up front so a failure arrives as a readable reason, not a mute <audio>. */
   prepare: (videoId: string) => invoke<void>('yt:prepare', videoId),
   /** No round trip needed: the protocol handler serves from the cache prepare() warmed. */

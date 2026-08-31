@@ -62,9 +62,9 @@ export function kindOf(url: string): 'playlist' | 'video' | 'search' {
  * The top result for a song title is often a 24/7 radio livestream or a
  * zero-duration premiere placeholder. Neither ever ends, so prefer a real track.
  */
-export function pickResult<T extends { is_live?: boolean; live_status?: string; duration?: number }>(
-  results: T[]
-): T | null {
+export function pickResult<
+  T extends { is_live?: boolean; live_status?: string; duration?: number }
+>(results: T[]): T | null {
   const isLive = (r: T): boolean => Boolean(r?.is_live) || r?.live_status === 'is_live'
   return results.find((r) => !isLive(r) && (r?.duration ?? 0) > 0) ?? results[0] ?? null
 }
@@ -209,6 +209,9 @@ export async function audioUrl(videoId: string): Promise<string> {
   ])
   const url = out.trim().split('\n')[0]
   if (!url) throw new Error('no playable audio track')
+  // A live stream resolves to an HLS manifest, which Chromium's <audio> cannot
+  // decode. Say so here, or the skip arrives as an unexplained "playback failed".
+  if (url.includes('/manifest/hls')) throw new Error('livestream, not playable')
 
   const expire = Number(new URL(url).searchParams.get('expire')) * 1000
   urlCache.set(videoId, { url, expires: (expire || Date.now() + 3_600_000) - 60_000 })

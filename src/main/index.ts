@@ -75,12 +75,15 @@ async function start(): Promise<void> {
 }
 
 // A failed boot must say why instead of leaving an invisible process behind.
-app.whenReady().then(start).catch((err) => {
-  const detail = String(err?.stack ?? err)
-  writeFileSync(join(app.getPath('userData'), 'startup-error.log'), detail)
-  dialog.showErrorBox('SYmuS failed to start', detail)
-  app.quit()
-})
+app
+  .whenReady()
+  .then(start)
+  .catch((err) => {
+    const detail = String(err?.stack ?? err)
+    writeFileSync(join(app.getPath('userData'), 'startup-error.log'), detail)
+    dialog.showErrorBox('SYmuS failed to start', detail)
+    app.quit()
+  })
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
