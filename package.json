@@ -4,7 +4,7 @@
   "description": "Desktop music player for YouTube, with local playlists, likes and history",
   "main": "./out/main/index.js",
   "author": {
-    "name": "Madhusudan"
+    "name": "SYmuS"
   },
   "scripts": {
     "format": "prettier --write .",

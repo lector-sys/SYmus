@@ -1,6 +1,6 @@
 appId: com.madhusudan.symusplayer
 productName: SYmuS
-copyright: Copyright © 2026 Madhusudan
+copyright: Copyright © 2026 SYmuS
 directories:
   buildResources: build
   output: dist
@@ -65,7 +65,7 @@ linux:
   target:
     - AppImage
   icon: build/icons
-  maintainer: Madhusudan
+  maintainer: SYmuS
   category: AudioVideo
   synopsis: Desktop music player
   description: Search, queue and play music from YouTube, with playlists, likes and history stored locally.
