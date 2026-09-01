@@ -464,18 +464,315 @@ try {
   }
   check('explore renders at least one shelf', shelfCount > 0, `${shelfCount} rows`)
 
-  const exploreHonesty = await evalUI(`
-    const main = document.querySelector('main')
-    const headings = [main.querySelector('h1') ? main.querySelector('h1').textContent : '',
-      ...[...main.querySelectorAll('h2')].map(h => h.textContent)].join(' ')
-    return { headingsClean: !/\bcharts?\b|\btrending\b/i.test(headings) }
+  // Explore is allowed to say "Charts" — one tab is called that, because it is
+  // where a listener looks for it. What it may never do is imply the numbers
+  // come from somewhere they do not, so the claim is what gets tested, across
+  // every tab, and the Charts tab has to say out loud whose listening it is.
+  const claims = await evalUI(`
+    const tabs = [...document.querySelectorAll('[role=tab]')]
+    const seen = {}
+    for (const tab of tabs) {
+      tab.click()
+      await new Promise(r => setTimeout(r, 700))
+      seen[tab.textContent.trim()] = document.querySelector('main').innerText
+    }
+    const back = tabs.find(t => t.textContent.trim() === 'New releases')
+    if (back) { back.click(); await new Promise(r => setTimeout(r, 700)) }
+    return seen
   `)
+  const overclaiming = Object.entries(claims).filter(([, text]) =>
+    // "not a global chart" is a disclaimer, not a claim, so the negated form is
+    // removed before the ban list runs — otherwise saying the honest thing is
+    // what trips the check.
+    /\bofficial\b|\bglobal chart|\bworldwide\b|trending on youtube|billboard/i.test(
+      text.replace(/\bnot a global chart\b/gi, '')
+    )
+  )
   check(
-    'explore headings do not claim to be a chart',
-    exploreHonesty.headingsClean,
-    JSON.stringify(exploreHonesty)
+    'no tab claims a source it does not have',
+    overclaiming.length === 0,
+    JSON.stringify(overclaiming.map(([tab]) => tab))
+  )
+  check(
+    'the Charts tab says whose listening it is',
+    /not a global chart/i.test(claims['Charts'] ?? ''),
+    JSON.stringify((claims['Charts'] ?? '').split('\n').slice(0, 3))
+  )
+  check(
+    'every tab explains where its rows come from',
+    Object.values(claims).every((text) =>
+      /found by search|recent uploads|your listening|your library/i.test(text)
+    ),
+    JSON.stringify(Object.keys(claims))
   )
   await shot('13-explore')
+
+  // ---- the explore tab bar -----------------------------------------------
+  const exploreTabs = await evalUI(`
+    const bar = document.querySelector('[role=tablist]')
+    if (!bar) return { present: false }
+    const tabs = [...bar.querySelectorAll('[role=tab]')]
+    return {
+      present: true,
+      labels: tabs.map(t => t.textContent.trim()),
+      selected: tabs.filter(t => t.getAttribute('aria-selected') === 'true').map(t => t.textContent.trim())
+    }
+  `)
+  check('Explore has a tab bar', exploreTabs.present, JSON.stringify(exploreTabs))
+  check(
+    'exactly one tab is selected',
+    exploreTabs.selected.length === 1 && exploreTabs.selected[0] === 'New releases',
+    JSON.stringify(exploreTabs)
+  )
+  check(
+    'New albums and singles leads the New releases tab',
+    await evalUI(
+      `return [...document.querySelectorAll('main h2, main .eyebrow')].some(h => h.textContent.trim() === 'New albums and singles')`
+    ),
+    JSON.stringify(exploreTabs.labels)
+  )
+
+  // Switching must swap the panel and the promise under the title, not just
+  // repaint the button: each tab is best-effort about something different.
+  const switched = await evalUI(`
+    const sub = () => document.querySelector('main').innerText.split('\\n').slice(0, 3).join(' | ')
+    const before = sub()
+    const moods = [...document.querySelectorAll('[role=tab]')].find(t => t.textContent.trim() === 'Moods and genres')
+    moods.click()
+    await new Promise(r => setTimeout(r, 900))
+    return {
+      before,
+      after: sub(),
+      selected: [...document.querySelectorAll('[role=tab][aria-selected=true]')].map(t => t.textContent.trim()),
+      tiles: document.querySelectorAll('.genre-tile').length
+    }
+  `)
+  check(
+    'choosing a tab swaps the panel',
+    switched.selected.length === 1 &&
+      switched.selected[0] === 'Moods and genres' &&
+      switched.tiles > 0,
+    JSON.stringify(switched)
+  )
+  check(
+    'and the promise under the title changes with it',
+    switched.before !== switched.after,
+    JSON.stringify(switched)
+  )
+
+  // ---- moods and genres --------------------------------------------------
+  const tiles = await evalUI('return await window.api.explore.tiles()')
+  check(
+    'the grid offers both tagged genres and untouched ones',
+    tiles.some((t) => t.count > 0) && tiles.some((t) => t.count === 0),
+    JSON.stringify(tiles.slice(0, 6))
+  )
+
+  const grid = await evalUI(`
+    const els = [...document.querySelectorAll('.genre-tile')]
+    return {
+      rendered: els.length,
+      // Distinct backgrounds prove the per-tile hue reached CSS, rather than
+      // every tile sharing one class and one colour.
+      colours: new Set(els.slice(0, 8).map(e => getComputedStyle(e).backgroundColor)).size,
+      readable: els.length ? getComputedStyle(els[0]).color !== getComputedStyle(els[0]).backgroundColor : false
+    }
+  `)
+  check(
+    'every tile renders',
+    grid.rendered === tiles.length,
+    JSON.stringify({ ...grid, tiles: tiles.length })
+  )
+  check('tiles are individually coloured', grid.colours > 1 && grid.readable, JSON.stringify(grid))
+  await shot('19-moods')
+
+  // A genre with nothing behind it is the interesting case: Devotional has no
+  // inference rule, so nothing can land in it except through Find more.
+  const opened = await evalUI(`
+    const tile = [...document.querySelectorAll('.genre-tile')].find(e => e.textContent.startsWith('Devotional'))
+    if (!tile) return { found: false }
+    tile.click()
+    await new Promise(r => setTimeout(r, 800))
+    const view = window.__nav.getState().view
+    return { found: true, kind: view.kind, name: view.name, rows: (await window.api.lib.byGenre('Devotional', 200)).length }
+  `)
+  check(
+    'a tile opens its genre page',
+    opened.found && opened.kind === 'genre' && opened.name === 'Devotional',
+    JSON.stringify(opened)
+  )
+  check('and that genre starts empty', opened.rows === 0, JSON.stringify(opened))
+
+  console.log('...finding more in an empty genre')
+  const found = await evalUI(`
+    const b = [...document.querySelectorAll('main button')].find(b => b.textContent.trim() === 'Find more')
+    if (!b) return { found: false }
+    b.click()
+    // One yt-dlp search, queued behind whatever Explore is already running.
+    for (let i = 0; i < 60; i++) {
+      const tagged = await window.api.lib.byGenre('Devotional', 200)
+      if (tagged.length) {
+        await new Promise(r => setTimeout(r, 900))
+        return {
+          found: true,
+          tagged: tagged.length,
+          rows: document.querySelectorAll('main img').length,
+          sample: tagged.slice(0, 2).map(t => t.title.slice(0, 40))
+        }
+      }
+      await new Promise(r => setTimeout(r, 1000))
+    }
+    return { found: true, tagged: 0, rows: 0 }
+  `)
+  check('Find more exists on a genre page', found.found)
+  check(
+    'it tags what it finds with the genre that was asked for',
+    found.tagged > 0,
+    JSON.stringify(found)
+  )
+  // The button is only useful if the page the user is standing on grows.
+  check('and the page it is on fills in', found.rows > 0, JSON.stringify(found))
+  await shot('20-genre-found')
+
+  // ---- the charts tab ----------------------------------------------------
+  // The tile click above left the app on a genre page, which has no tab bar.
+  await goTo('Explore')
+  await sleep(700)
+  const charts = await evalUI(`
+    const tab = [...document.querySelectorAll('[role=tab]')].find(t => t.textContent.trim() === 'Charts')
+    if (!tab) return { present: false }
+    tab.click()
+    await new Promise(r => setTimeout(r, 1500))
+    const text = document.querySelector('main').innerText.toLowerCase()
+    const data = await window.api.explore.charts()
+    return {
+      present: true,
+      text,
+      tracks: text.includes('your top tracks'),
+      artists: text.includes('your top artists'),
+      topTrack: data.tracks[0] ? data.tracks[0].title : null,
+      topPlays: data.tracks[0] ? data.tracks[0].plays : 0,
+      sparse: data.sparse
+    }
+  `)
+  check('Explore has a Charts tab', charts.present, JSON.stringify(charts.present))
+  check(
+    "it ranks this library's own tracks and artists",
+    charts.tracks && charts.artists && charts.topPlays > 0,
+    JSON.stringify({
+      tracks: charts.tracks,
+      artists: charts.artists,
+      top: charts.topTrack,
+      plays: charts.topPlays
+    })
+  )
+  // The searched supplement only appears when the local numbers are too thin,
+  // and when it does it has to name itself as a search.
+  check(
+    'a thin history is supplemented, and the supplement says it is a search',
+    charts.sparse
+      ? (charts.text ?? '').includes('popular right now (from search)')
+      : !(charts.text ?? '').includes('popular right now'),
+    JSON.stringify({ sparse: charts.sparse })
+  )
+  await shot('21-charts')
+
+  // ---- the podcasts tab --------------------------------------------------
+  console.log('...searching for talk uploads')
+  const podcasts = await evalUI(`
+    const tab = [...document.querySelectorAll('[role=tab]')].find(t => t.textContent.trim() === 'Podcasts')
+    if (!tab) return { present: false }
+    tab.click()
+
+    // One yt-dlp search, then the row renders.
+    let found = null
+    for (let i = 0; i < 60 && !found; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      const main = document.querySelector('main')
+      if (main.querySelectorAll('img').length) found = main.innerText.toLowerCase()
+    }
+    const data = await window.api.podcasts.discover()
+    return {
+      present: true,
+      text: found,
+      query: data.query,
+      episodes: data.tracks.length,
+      channels: data.channels.length,
+      firstChannel: data.channels[0] ?? null
+    }
+  `)
+  check('Explore has a Podcasts tab', podcasts.present, JSON.stringify(podcasts.present))
+  check(
+    'it finds talk uploads',
+    podcasts.episodes > 0,
+    JSON.stringify({ query: podcasts.query, episodes: podcasts.episodes })
+  )
+  // The row has to name the search it ran: there is no podcast directory here,
+  // and a row that did not say so would imply one.
+  check(
+    'and the row names the search it ran',
+    (podcasts.text ?? '').includes(String(podcasts.query).toLowerCase()),
+    JSON.stringify({ query: podcasts.query, text: (podcasts.text ?? '').slice(0, 120) })
+  )
+
+  // The contentType tag is only worth having if the music paths read it.
+  const leaked = await evalUI(`
+    const episodes = (await window.api.podcasts.discover()).tracks.map(t => t.videoId)
+    const made = await window.api.lib.recommended(50)
+    const similar = await window.api.lib.similar(made[0] ?? { videoId: 'aaaaaaaaaaa', title: 'x', artist: null, thumbnailUrl: '', duration: 1 }, [], 50)
+    return {
+      inMadeForYou: made.filter(t => episodes.includes(t.videoId)).map(t => t.title),
+      inAutoplay: similar.filter(t => episodes.includes(t.videoId)).map(t => t.title)
+    }
+  `)
+  check(
+    'episodes stay out of the music recommendations',
+    leaked.inMadeForYou.length === 0 && leaked.inAutoplay.length === 0,
+    JSON.stringify(leaked)
+  )
+
+  if (podcasts.firstChannel) {
+    console.log('...following a channel')
+    const followed = await evalUI(`
+      const chip = [...document.querySelectorAll('main button')].find(
+        b => b.textContent.trim() === ${JSON.stringify(podcasts.firstChannel.name)}
+      )
+      if (!chip) return { clicked: false }
+      chip.click()
+
+      // Following fetches that channel's uploads, which is another yt-dlp run.
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 1000))
+        const list = await window.api.podcasts.following()
+        const shown = document.querySelector('main').innerText
+        if (list.length && shown.toUpperCase().includes(${JSON.stringify(podcasts.firstChannel.name.toUpperCase())})) {
+          return { clicked: true, following: list.length, name: list[0].name, hasUnfollow: shown.includes('Unfollow') }
+        }
+      }
+      return { clicked: true, following: (await window.api.podcasts.following()).length }
+    `)
+    check(
+      'following a channel gives it its own row',
+      followed.clicked && followed.following === 1 && followed.hasUnfollow === true,
+      JSON.stringify(followed)
+    )
+    await shot('22-podcasts')
+
+    const dropped = await evalUI(`
+      const b = [...document.querySelectorAll('main button')].find(b => b.textContent.trim() === 'Unfollow')
+      if (!b) return { found: false }
+      b.click()
+      await new Promise(r => setTimeout(r, 1200))
+      return { found: true, following: (await window.api.podcasts.following()).length }
+    `)
+    check(
+      'and unfollowing takes it away again',
+      dropped.found && dropped.following === 0,
+      JSON.stringify(dropped)
+    )
+  } else {
+    check('the search returned a channel to follow', false, 'no channel id came back')
+  }
 
   // ---- autoplay ----------------------------------------------------------
   // Repeat must win: with repeat on, an empty queue is about to loop, not idle.
@@ -692,8 +989,20 @@ try {
   // one check that pulls a whole file off the CDN, so a stall here is reported
   // as a failure rather than killing the run at the CDP timeout.
   const offline = await evalUI(`
-    const [track] = await window.api.lib.recent(1)
-    if (!track) return { ok: false, error: 'nothing has been played yet' }
+    // Not simply the newest play: this library is full of multi-hour lofi
+    // streams, and downloading 700 MB proves nothing the shortest real track
+    // does not. A track between one and fifteen minutes is a normal song, which
+    // is what this path exists for.
+    const recent = await window.api.lib.recent(30)
+    // Duration 0 is a livestream or an unstarted premiere — the app itself
+    // refuses to queue those, and neither has a file to download.
+    // The shortest real song, because this check is about the path, not the
+    // bytes: the same library also holds 133 MB uploads, which download fine and
+    // take minutes doing it.
+    const track = recent
+      .filter((t) => t.duration >= 60)
+      .sort((a, b) => a.duration - b.duration)[0]
+    if (!track) return { ok: false, error: 'no ordinary-length track has been played yet' }
     const took = {}
     const step = async (name, work) => {
       const t0 = Date.now()
@@ -712,17 +1021,30 @@ try {
       const list = await window.api.offline.list()
       const summary = await window.api.offline.summary()
       const row = list.find(t => t.videoId === track.videoId)
-      return { ok: true, videoId: track.videoId, title: track.title, bytes, status, summary, listedBytes: row && row.bytes, took }
+      return { ok: true, videoId: track.videoId, title: track.title, seconds: track.duration, bytes, status, summary, listedBytes: row && row.bytes, took }
     } catch (err) {
-      return { ok: false, error: String((err && err.message) || err), videoId: track.videoId, took }
+      return { ok: false, error: String((err && err.message) || err), videoId: track.videoId, seconds: track.duration, took }
     }
   `)
   if (!offline.ok) {
-    check(
-      'offline saved a played track',
-      false,
-      offline.error + ' ' + JSON.stringify(offline.took || {})
-    )
+    // Nothing worth downloading is a skip, not a failure: it means this run
+    // never played an ordinary-length track, which is about the library rather
+    // than the code.
+    if (/no ordinary-length track/.test(offline.error)) {
+      console.log('      SKIP: offline checks —', offline.error)
+    } else {
+      check(
+        'offline saved a played track',
+        false,
+        offline.error +
+          ' ' +
+          JSON.stringify({
+            videoId: offline.videoId,
+            seconds: offline.seconds,
+            took: offline.took || {}
+          })
+      )
+    }
   } else {
     check('the audio actually landed on disk', offline.bytes > 100_000, `${offline.bytes} bytes`)
     check(

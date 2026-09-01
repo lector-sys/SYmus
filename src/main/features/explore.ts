@@ -1,7 +1,9 @@
 import type { IpcMain } from 'electron'
 import { z } from 'zod'
 import { search, type Track } from '../youtube'
-import { genres, saveTracks, topArtists } from '../library'
+import { genres, mostPlayed, mostPlayedArtists, saveTracks, topArtists } from '../library'
+import type { SavedTrack } from '../library'
+import { prisma } from '../db'
 
 /**
  * IPC for explore shelves.
@@ -79,6 +81,22 @@ export async function planShelves(): Promise<ExploreShelf[]> {
   const shelves: ExploreShelf[] = []
 
   const year = new Date().getFullYear()
+
+  // First, so it survives the SHELF_LIMIT slice below and the page opens on it.
+  //
+  // YouTube search does not expose release type, so this is the same best-effort
+  // search every other shelf here runs — seeded with the genre the library leans
+  // on hardest. The title says albums and singles because that is what the query
+  // asks for, not because the source can tell them apart, which is why the tab
+  // says "based on recent uploads" rather than claiming a release calendar.
+  const lead = byGenre[0]?.genre ?? null
+  shelves.push({
+    id: 'new-albums-singles',
+    title: 'New albums and singles',
+    query: lead ? `new ${lead} albums and singles ${year}` : `new albums and singles ${year}`,
+    hint: lead
+  })
+
   for (const { genre } of byGenre.slice(0, 3)) {
     shelves.push({
       id: `genre-new-${genre}`,
@@ -120,6 +138,110 @@ export async function planShelves(): Promise<ExploreShelf[]> {
   return shelves.slice(0, SHELF_LIMIT)
 }
 
+/**
+ * Genres offered as tiles even when nothing is tagged with them yet.
+ *
+ * A grid built only from tagged genres would be empty on a fresh library and
+ * could never grow, because the way a genre gets its first track is someone
+ * pressing its tile and running Find more. Most of these match a rule in
+ * library.ts and so fill themselves in over time; the ones that do not —
+ * Devotional, Punjabi, Tamil — only ever arrive through Find more, which is
+ * why that path tags what it saves.
+ */
+const COMMON_GENRES = [
+  'Rock',
+  'Pop',
+  'Hip-hop',
+  'Electronic',
+  'Classical',
+  'Jazz',
+  'Lo-fi',
+  'R&B',
+  'Metal',
+  'Folk',
+  'Country',
+  'Latin',
+  'Reggae',
+  'Ambient',
+  'Soundtrack',
+  'Bollywood',
+  'Indian classical',
+  'Devotional',
+  'Punjabi',
+  'Tamil'
+]
+
+export interface GenreTile {
+  genre: string
+  /** Tracks already tagged with it. Zero means browsable but not yet populated. */
+  count: number
+}
+
+/**
+ * Tiles for the moods and genres grid: what the library actually has, biggest
+ * first, then the common genres it does not have yet.
+ *
+ * Sparse genres are deliberately not hidden. A tile with nothing behind it is
+ * the entry point to Find more, not a dead end.
+ */
+export async function genreTiles(): Promise<GenreTile[]> {
+  const tagged = await genres()
+  const have = new Set(tagged.map((g) => g.genre.toLowerCase()))
+  return [
+    ...tagged,
+    ...COMMON_GENRES.filter((g) => !have.has(g.toLowerCase())).map((genre) => ({ genre, count: 0 }))
+  ]
+}
+
+/**
+ * Searches YouTube for a genre and files the results under it. Resolves to how
+ * many tracks are now tagged with it.
+ *
+ * saveTracks tags what it can from each title, but a genre with no inference
+ * rule — Devotional, Punjabi — would leave every result untagged, and the page
+ * the user is standing on would not gain a single row. So anything that came
+ * back without a tag is tagged with the genre that was asked for; rows that
+ * already carry one keep it, since a specific guess beats the search term.
+ *
+ * Runs through the same chain as the shelves: one yt-dlp process at a time.
+ */
+export async function findMoreInGenre(genre: string, limit = 20): Promise<number> {
+  const tracks = await serial(() => search(`${genre} music`, limit))
+  if (!tracks.length) return 0
+
+  await saveTracks(tracks, genre)
+  await prisma.track.updateMany({
+    where: { videoId: { in: tracks.map((t) => t.videoId) }, genre: null },
+    data: { genre }
+  })
+  return prisma.track.count({ where: { genre } })
+}
+
+export interface Charts {
+  tracks: (SavedTrack & { plays: number })[]
+  artists: { artist: string; plays: number }[]
+  /**
+   * Too little listening for the two lists to say anything. The page adds a
+   * searched shelf when this is set, clearly marked as coming from search.
+   */
+  sparse: boolean
+}
+
+/**
+ * What the Charts tab shows: this library's own play counts.
+ *
+ * There is no global chart behind any of this and there is no API here that
+ * could provide one. Everything below is counted locally, which is what the
+ * tab's subtitle says, and the searched supplement is labelled separately so
+ * the two can never be mistaken for each other.
+ */
+export async function charts(): Promise<Charts> {
+  const [tracks, artists] = await Promise.all([mostPlayed(12), mostPlayedArtists(12)])
+  // Under eight played tracks the ranking is noise — one afternoon of listening
+  // ordered by accident. The page still shows it, and adds something to press.
+  return { tracks, artists, sparse: tracks.length < 8 }
+}
+
 /** Fetches one shelf and files whatever it finds into the library. */
 async function fetchShelf(query: string, hint: string | null): Promise<Track[]> {
   const tracks = await search(query, PER_SHELF)
@@ -159,7 +281,12 @@ export function registerExplore(ipcMain: IpcMain): void {
   const Query = z.string().trim().min(1).max(200)
   const Hint = z.string().trim().max(60).nullable().catch(null)
 
+  const Genre = z.string().trim().min(1).max(60)
+
   ipcMain.handle('explore:plan', () => planShelves())
+  ipcMain.handle('explore:tiles', () => genreTiles())
+  ipcMain.handle('explore:charts', () => charts())
+  ipcMain.handle('explore:findMore', (_e, genre) => findMoreInGenre(Genre.parse(genre)))
   ipcMain.handle('explore:shelf', (_e, query, hint) =>
     loadShelf(Query.parse(query), Hint.parse(hint))
   )

@@ -203,6 +203,22 @@
     display: none;
   }
 
+  /* Moods and genres tiles.
+
+     The hue is set per tile as --tile-h; the lightness comes from the theme.
+     Splitting it that way means the component never has to know which theme is
+     on, and an accent swap does not have to repaint a grid that is deliberately
+     not accent-coloured. The label takes its colour from the same hue, so
+     contrast holds on every tile without a per-colour table. */
+  .genre-tile {
+    background: hsl(var(--tile-h) 52% 31%);
+    color: hsl(var(--tile-h) 65% 92%);
+  }
+  :root[data-theme='light'] .genre-tile {
+    background: hsl(var(--tile-h) 58% 82%);
+    color: hsl(var(--tile-h) 70% 20%);
+  }
+
   .eyebrow {
     font-size: 11px;
     font-weight: 600;

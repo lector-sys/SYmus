@@ -3,7 +3,7 @@ import type { SavedTrack } from '../../preload'
 import { usePlayer, useNav } from './store'
 import { useLibrary } from './useLibrary'
 import { TrackCard } from './TrackRow'
-import { Card, CardSkeletons, Empty, Eyebrow, Shelf } from './ui'
+import { Card, CardSkeletons, Chip, Empty, Eyebrow, Shelf } from './ui'
 
 /** Local hour decides the greeting. Small touch, but it makes the app feel awake. */
 function greeting(): string {
@@ -46,31 +46,6 @@ function TrackShelf({
         </Shelf>
       )}
     </section>
-  )
-}
-
-function Chip({
-  icon: Icon,
-  label,
-  count,
-  onClick
-}: {
-  icon: typeof Compass
-  label: string
-  count: number
-  onClick: () => void
-}): React.JSX.Element {
-  return (
-    <button
-      onClick={onClick}
-      className="group flex max-w-xs items-center gap-2.5 rounded-full border border-line bg-panel py-2 pr-3 pl-4 text-[13px] transition-colors duration-150 hover:border-dust hover:bg-raised"
-    >
-      <Icon size={13} className="shrink-0 text-dust transition-colors group-hover:text-ember" />
-      <span className="truncate">{label}</span>
-      <span className="shrink-0 rounded-full bg-lifted px-2 py-0.5 font-mono text-[11px] text-ash">
-        {count}
-      </span>
-    </button>
   )
 }
 

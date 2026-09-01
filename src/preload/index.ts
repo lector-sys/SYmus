@@ -8,6 +8,7 @@ import { lyricsApi } from './features/lyrics'
 import { offlineApi } from './features/offline'
 import { exploreApi } from './features/explore'
 import { albumsApi } from './features/albums'
+import { podcastsApi } from './features/podcasts'
 import { settingsApi } from './features/settings'
 
 import { invoke } from './invoke'
@@ -132,6 +133,7 @@ const api = {
   offline: offlineApi,
   explore: exploreApi,
   albums: albumsApi,
+  podcasts: podcastsApi,
   settings: settingsApi
 }
 

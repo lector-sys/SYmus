@@ -1,8 +1,8 @@
 import { invoke } from '../invoke'
 import type { Track } from '../../main/youtube'
-import type { ExploreShelf } from '../../main/features/explore'
+import type { Charts, ExploreShelf, GenreTile } from '../../main/features/explore'
 
-export type { ExploreShelf }
+export type { Charts, ExploreShelf, GenreTile }
 
 /** Renderer-facing API for explore. Owned by that feature alone. */
 export const exploreApi = {
@@ -14,5 +14,14 @@ export const exploreApi = {
    * it arrives.
    */
   shelf: (query: string, hint: string | null) => invoke<Track[]>('explore:shelf', query, hint),
+  /** Genres for the moods grid: the tagged ones, then common ones not seen yet. */
+  tiles: () => invoke<GenreTile[]>('explore:tiles'),
+  /** This library's own play counts, and whether there are enough to mean anything. */
+  charts: () => invoke<Charts>('explore:charts'),
+  /**
+   * Searches YouTube for a genre and files what it finds under it. Resolves to
+   * how many tracks now carry the tag, so a sparse genre page can refill itself.
+   */
+  findMore: (genre: string) => invoke<number>('explore:findMore', genre),
   clearCache: () => invoke<boolean>('explore:clearCache')
 }

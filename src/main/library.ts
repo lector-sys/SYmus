@@ -323,6 +323,32 @@ export async function topArtists(limit = 16): Promise<{ artist: string; count: n
   return rows.map((r) => ({ artist: r.artist!, count: r._count.artist }))
 }
 
+/**
+ * Artists ranked by how often they have actually been played.
+ *
+ * topArtists() ranks by how many of their tracks are in the library, which is a
+ * different question and would put a 40-track import above the artist on repeat
+ * all week. The Charts tab claims to reflect listening, so it has to count plays.
+ *
+ * ponytail: tallies the history in memory rather than grouping in SQL. Prisma
+ * cannot group across the join, and a personal history is thousands of rows, not
+ * millions — swap in a raw GROUP BY if that stops being true.
+ */
+export async function mostPlayedArtists(limit = 12): Promise<{ artist: string; plays: number }[]> {
+  const entries = await prisma.historyEntry.findMany({
+    select: { track: { select: { artist: true } } }
+  })
+  const tally = new Map<string, number>()
+  for (const { track } of entries) {
+    const artist = track.artist?.trim()
+    if (artist) tally.set(artist, (tally.get(artist) ?? 0) + 1)
+  }
+  return [...tally]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([artist, plays]) => ({ artist, plays }))
+}
+
 export const tracksByArtist = async (artist: string, limit = 60): Promise<SavedTrack[]> =>
   (
     await prisma.track.findMany({
@@ -385,6 +411,10 @@ export async function recommended(limit = 20): Promise<SavedTrack[]> {
   const pool = await prisma.track.findMany({
     where: {
       id: { notIn: [...exclude, ...disliked] },
+      // Podcasts are saved as tracks so they can be played and cached like
+      // anything else, but a three-hour interview has no business turning up in
+      // "Made for you". The tag is what keeps the two apart.
+      contentType: null,
       OR: [
         ...(genreKeys.length ? [{ genre: { in: genreKeys } }] : []),
         ...(artistKeys.length ? [{ artist: { in: artistKeys } }] : [])
@@ -438,7 +468,13 @@ export async function similarTo(
   let picked: SavedTrack[] = []
   if (match.length) {
     const pool = await prisma.track.findMany({
-      where: { OR: match, videoId: { notIn: [...skip] }, id: { notIn: dislikedIds } },
+      where: {
+        OR: match,
+        videoId: { notIn: [...skip] },
+        id: { notIn: dislikedIds },
+        // Autoplay follows a song with a song, never with an interview.
+        contentType: null
+      },
       take: 300,
       select: { id: true, ...SELECT }
     })

@@ -16,6 +16,7 @@ import { registerLyrics } from './features/lyrics'
 import { registerOffline } from './features/offline'
 import { registerExplore } from './features/explore'
 import { registerAlbums } from './features/albums'
+import { registerPodcasts } from './features/podcasts'
 import { registerSettings, loadSettings, shouldMinimizeToTray } from './features/settings'
 import { registerMini, pushToMini } from './mini'
 
@@ -212,6 +213,7 @@ async function start(): Promise<void> {
     registerOffline,
     registerExplore,
     registerAlbums,
+    registerPodcasts,
     registerSettings
   ]) {
     register(ipcMain)

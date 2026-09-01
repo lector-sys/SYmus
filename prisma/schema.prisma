@@ -16,6 +16,9 @@ model Track {
   thumbnailUrl String?
   duration     Int // seconds; 0 = livestream/unknown
   genre        String? // free-text tag: inferred on add, editable in the UI
+  /// "podcast" for talk uploads found by the Podcasts tab. Null is music, which
+  /// is every row that existed before that tab did.
+  contentType  String?
   addedAt      DateTime @default(now())
 
   /// Absolute path under userData once the audio has been cached for offline use.
@@ -66,6 +69,15 @@ model SearchQuery {
 model Setting {
   key   String @id
   value String
+}
+
+/// A YouTube channel the user follows, for the Podcasts tab's own shelves.
+/// Keyed by channel id rather than name: channels rename themselves, and two
+/// channels can share a display name.
+model FollowedChannel {
+  channelId  String   @id
+  name       String
+  followedAt DateTime @default(now())
 }
 
 model Playlist {

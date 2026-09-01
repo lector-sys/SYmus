@@ -1,5 +1,16 @@
 import { useState } from 'react'
-import { Heart, ListMusic, Pencil, Play, Radio, Shuffle, Tag, Trash2 } from 'lucide-react'
+import {
+  Heart,
+  ListMusic,
+  Loader2,
+  Pencil,
+  Play,
+  Radio,
+  Search,
+  Shuffle,
+  Tag,
+  Trash2
+} from 'lucide-react'
 import type { SavedTrack } from '../../preload'
 import { usePlayer, useNav } from './store'
 import { useLibrary } from './useLibrary'
@@ -14,12 +25,15 @@ function ListHeader({
   title,
   subtitle,
   tracks,
-  art
+  art,
+  action
 }: {
   title: string
   subtitle: string
   tracks: SavedTrack[]
   art?: React.ReactNode
+  /** A page-specific button, rendered after the three every list has. */
+  action?: React.ReactNode
 }): React.JSX.Element {
   const { playNow, toggleShuffle, shuffle, startRadio } = usePlayer()
   return (
@@ -54,6 +68,7 @@ function ListHeader({
       >
         <Radio size={15} /> Start radio
       </button>
+      {action}
     </div>
   )
 }
@@ -65,6 +80,7 @@ function TrackListPage({
   onRemove,
   empty,
   art,
+  action,
   cacheKey
 }: {
   title: string
@@ -73,6 +89,7 @@ function TrackListPage({
   onRemove?: (t: SavedTrack) => void
   empty: React.ReactNode
   art?: React.ReactNode
+  action?: React.ReactNode
   cacheKey: string
 }): React.JSX.Element {
   const { data: tracks, loading } = useLibrary(load, [], [cacheKey])
@@ -84,6 +101,7 @@ function TrackListPage({
         subtitle={subtitle ? subtitle(tracks) : `${tracks.length} tracks`}
         tracks={tracks}
         art={art}
+        action={action}
       />
       {loading ? (
         <RowSkeletons />
@@ -135,16 +153,44 @@ export function LikedView(): React.JSX.Element {
 }
 
 export function GenreView({ name }: { name: string }): React.JSX.Element {
+  const { libraryChanged, toast } = usePlayer()
+  const [finding, setFinding] = useState(false)
+
+  /**
+   * The way a sparse genre fills up. It searches YouTube for the genre, files
+   * the results under it, and tells the library it changed — which is what
+   * refetches the list underneath, so the page the user is looking at grows
+   * instead of just flashing a toast.
+   */
+  async function findMore(): Promise<void> {
+    setFinding(true)
+    try {
+      const total = await window.api.explore.findMore(name)
+      libraryChanged()
+      toast(total ? `${name} now has ${total} tracks` : `Nothing came back for ${name}`)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err))
+    } finally {
+      setFinding(false)
+    }
+  }
+
   return (
     <TrackListPage
       cacheKey={`genre:${name}`}
       title={name}
       load={() => window.api.lib.byGenre(name, 200)}
+      action={
+        <button onClick={findMore} disabled={finding} className={pill}>
+          {finding ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+          {finding ? 'Searching' : 'Find more'}
+        </button>
+      }
       empty={
         <Empty
           icon={Tag}
           title={`Nothing tagged ${name}`}
-          hint="Tag a track with this genre from the tag button on any library row."
+          hint="Find more searches YouTube for this genre and files what it finds under it."
         />
       }
     />

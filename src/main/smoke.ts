@@ -5,6 +5,7 @@ import * as imp from './import'
 import * as sh from './features/searchHistory'
 import * as lyr from './features/lyrics'
 import * as explore from './features/explore'
+import * as pod from './features/podcasts'
 import type { Track } from './youtube'
 
 /**
@@ -463,6 +464,132 @@ export async function smoke(): Promise<void> {
     'no shelf claims to be a chart',
     !plan.some((sh2) => /\bcharts?\b|\btrending\b|\btop 100\b/i.test(sh2.title)),
     JSON.stringify(plan.map((sh2) => sh2.title))
+  )
+
+  ok(
+    'new albums and singles leads the plan',
+    plan[0]?.id === 'new-albums-singles',
+    JSON.stringify(plan.map((sh2) => sh2.id))
+  )
+  ok(
+    'it is seeded from the library when there is a genre to seed from',
+    plan[0].query.includes('albums and singles'),
+    plan[0].query
+  )
+
+  // -- charts ----------------------------------------------------------------
+  // Every history assertion above has already run, so the log can be cleared to
+  // make the counts here exact rather than "whatever the earlier sections left".
+  await prisma.historyEntry.deleteMany()
+  ok('nothing played reads as too thin to rank', (await explore.charts()).sparse === true)
+
+  // The distinction that matters: an artist with a shelf full of tracks nobody
+  // plays must not outrank one track played all week. topArtists() ranks by
+  // library size and would get exactly that backwards, which is why charts()
+  // does not use it.
+  const heavy = track(80, 'One Song On Repeat', 'Repeat Artist')
+  const wide = [81, 82, 83, 84, 85].map((n) => track(n, `Shelf Filler ${n}`, 'Ignored Artist'))
+  await lib.saveTracks([heavy, ...wide], null)
+  for (let i = 0; i < 6; i++) await lib.recordPlay(heavy)
+  await lib.recordPlay(wide[0])
+
+  const chart = await explore.charts()
+  ok(
+    'top tracks are ranked by plays',
+    chart.tracks[0]?.videoId === heavy.videoId && chart.tracks[0].plays === 6,
+    JSON.stringify(chart.tracks.map((t) => [t.title, t.plays]))
+  )
+  ok(
+    'top artists count plays, not how many tracks they have',
+    chart.artists[0]?.artist === 'Repeat Artist' && chart.artists[0].plays === 6,
+    JSON.stringify(chart.artists)
+  )
+  ok('two played tracks is still too thin', chart.sparse === true, chart.tracks.length)
+
+  for (const t of wide.slice(1)) await lib.recordPlay(t)
+  for (const n of [86, 87, 88]) await lib.recordPlay(track(n, `Later ${n}`, 'Someone Else'))
+  const fuller = await explore.charts()
+  ok(
+    'and it stops being thin once there is enough to rank',
+    fuller.sparse === false && fuller.tracks.length >= 8,
+    JSON.stringify({ played: fuller.tracks.length, sparse: fuller.sparse })
+  )
+
+  // -- podcasts --------------------------------------------------------------
+  // The seed rotates by day, not by visit: a shelf that reshuffles while you are
+  // reading it is worse than one that does not.
+  const day = (iso: string): Date => new Date(iso)
+  ok(
+    'the seed is stable within a day',
+    pod.seedForDay(day('2026-03-04T01:00:00Z')) === pod.seedForDay(day('2026-03-04T23:00:00Z')),
+    pod.seedForDay(day('2026-03-04T01:00:00Z'))
+  )
+  ok(
+    'and moves on the next one',
+    pod.seedForDay(day('2026-03-04T12:00:00Z')) !== pod.seedForDay(day('2026-03-05T12:00:00Z')),
+    [pod.seedForDay(day('2026-03-04T12:00:00Z')), pod.seedForDay(day('2026-03-05T12:00:00Z'))]
+  )
+
+  ok('nothing is followed to begin with', (await pod.following()).length === 0)
+  await pod.follow('UCsmokechannel01', 'Smoke Talks')
+  ok('following one records it', (await pod.following())[0]?.name === 'Smoke Talks')
+  // Channels rename themselves; the id is the identity, so this must update the
+  // row rather than leave a second copy under the old name.
+  await pod.follow('UCsmokechannel01', 'Smoke Talks Renamed')
+  const after = await pod.following()
+  ok(
+    'a renamed channel updates in place',
+    after.length === 1 && after[0].name === 'Smoke Talks Renamed',
+    JSON.stringify(after)
+  )
+  await pod.unfollow('UCsmokechannel01')
+  ok('unfollowing removes it', (await pod.following()).length === 0)
+
+  // The contentType tag only earns its place if the music paths read it.
+  const talk = track(90, 'Three Hour Interview Episode', 'Repeat Artist')
+  await lib.saveTracks([talk], null)
+  await prisma.track.update({
+    where: { videoId: talk.videoId },
+    data: { contentType: 'podcast', genre: 'Jazz' }
+  })
+  const recommended = await lib.recommended(50)
+  ok(
+    'a podcast never turns up in made for you',
+    !recommended.some((t) => t.videoId === talk.videoId),
+    JSON.stringify(recommended.slice(0, 3).map((t) => t.title))
+  )
+  const nextUp = await lib.similarTo(heavy, [], 50)
+  ok(
+    'and autoplay never follows a song with one',
+    !nextUp.some((t) => t.videoId === talk.videoId),
+    JSON.stringify(nextUp.slice(0, 3).map((t) => t.title))
+  )
+
+  // -- moods and genres tiles ------------------------------------------------
+  const tiles = await explore.genreTiles()
+  const tagged = await lib.genres()
+  ok('tiles exist without a single tag', tiles.length > 0, tiles.length)
+  ok(
+    'every tagged genre is a tile, with its count',
+    tagged.every((g) => tiles.some((t) => t.genre === g.genre && t.count === g.count)),
+    JSON.stringify({ tagged, tiles: tiles.slice(0, 4) })
+  )
+  ok(
+    'the tagged ones come first',
+    tiles.slice(0, tagged.length).every((t) => t.count > 0),
+    JSON.stringify(tiles.slice(0, tagged.length))
+  )
+  // Sparse genres are the point: a tile with nothing behind it is the entry
+  // point to Find more. Hiding them would leave the grid unable to grow.
+  ok(
+    'common genres are offered even with nothing tagged',
+    ['Rock', 'Devotional', 'Punjabi'].every((g) => tiles.some((t) => t.genre === g)),
+    JSON.stringify(tiles.map((t) => t.genre))
+  )
+  ok(
+    'a genre is never listed twice',
+    new Set(tiles.map((t) => t.genre.toLowerCase())).size === tiles.length,
+    JSON.stringify(tiles.map((t) => t.genre))
   )
 
   await lib.deletePlaylist(id)

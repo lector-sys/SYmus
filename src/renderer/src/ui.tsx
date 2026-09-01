@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
-import { ChevronLeft, ChevronRight, Music, Play } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Compass, Music, Play } from 'lucide-react'
 
 /**
  * The app icon's three bars, animating while playback runs and frozen flat when
@@ -236,6 +236,36 @@ export function RowSkeletons({ count = 8 }: { count?: number }): React.JSX.Eleme
 }
 
 /** Empty states are an invitation to act, so each one names the next step. */
+/**
+ * A labelled, counted pill. Genres on Home, artists on the Charts tab — the
+ * same shape wherever a list of names with numbers is browsable rather than
+ * playable.
+ */
+export function Chip({
+  icon: Icon,
+  label,
+  count,
+  onClick
+}: {
+  icon: typeof Compass
+  label: string
+  count: number
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className="group flex max-w-xs items-center gap-2.5 rounded-full border border-line bg-panel py-2 pr-3 pl-4 text-[13px] transition-colors duration-150 hover:border-dust hover:bg-raised"
+    >
+      <Icon size={13} className="shrink-0 text-dust transition-colors group-hover:text-ember" />
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 rounded-full bg-lifted px-2 py-0.5 font-mono text-[11px] text-ash">
+        {count}
+      </span>
+    </button>
+  )
+}
+
 export function Empty({
   icon: Icon,
   title,

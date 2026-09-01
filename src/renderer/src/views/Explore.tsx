@@ -4,6 +4,9 @@ import type { Track } from '../../../preload'
 import type { ExploreShelf } from '../../../preload/features/explore'
 import { TrackCard } from '../TrackRow'
 import { CardSkeletons, Empty, Eyebrow, PageTitle, Shelf } from '../ui'
+import Moods from './Moods'
+import Charts from './Charts'
+import Podcasts from './Podcasts'
 
 /** Undefined means still loading; an array means loaded, possibly empty. */
 type ShelfState = Record<string, Track[] | undefined>
@@ -35,7 +38,15 @@ function ShelfRow({
   )
 }
 
-export default function Explore(): React.JSX.Element {
+/**
+ * The New releases tab: shelves planned from the library, each filled by its own
+ * search.
+ *
+ * "New" here means recently uploaded and found by searching, which is not a
+ * release calendar — the tab says so under its title, and the shelf titles say
+ * where they came from.
+ */
+function NewReleases(): React.JSX.Element {
   const [plan, setPlan] = useState<ExploreShelf[] | null>(null)
   const [rows, setRows] = useState<ShelfState>({})
   const [failed, setFailed] = useState(false)
@@ -95,13 +106,8 @@ export default function Explore(): React.JSX.Element {
   const anything = plan?.some((s) => rows[s.id]?.length) ?? false
 
   return (
-    <div className="view-enter px-6 py-6">
-      <div className="mb-6 flex items-end gap-4">
-        <div className="flex-1">
-          <PageTitle sub="Found by searching YouTube — a look around, not a chart">
-            Explore
-          </PageTitle>
-        </div>
+    <>
+      <div className="mb-6 flex justify-end">
         <button
           onClick={refresh}
           disabled={refreshing}
@@ -133,6 +139,73 @@ export default function Explore(): React.JSX.Element {
           hint="Every search returned empty. Check your connection, then try Refresh."
         />
       )}
+    </>
+  )
+}
+
+/**
+ * The tabs, and what each one promises.
+ *
+ * The subtitle is part of the tab rather than the page: every tab here is
+ * best-effort, but each is best-effort about something different, and a single
+ * standing disclaimer would end up describing none of them accurately.
+ */
+const TABS = [
+  {
+    id: 'new' as const,
+    label: 'New releases',
+    sub: 'Based on recent uploads — found by search, not a release calendar',
+    panel: () => <NewReleases />
+  },
+  {
+    id: 'charts' as const,
+    label: 'Charts',
+    sub: 'Your listening — not a global chart',
+    panel: () => <Charts />
+  },
+  {
+    id: 'moods' as const,
+    label: 'Moods and genres',
+    sub: 'Every genre your library uses, plus common ones to start from',
+    panel: () => <Moods />
+  },
+  {
+    id: 'podcasts' as const,
+    label: 'Podcasts',
+    sub: 'Talk uploads found by searching YouTube — not a podcast directory',
+    panel: () => <Podcasts />
+  }
+]
+
+type TabId = (typeof TABS)[number]['id']
+
+export default function Explore(): React.JSX.Element {
+  const [active, setActive] = useState<TabId>('new')
+  const tab = TABS.find((t) => t.id === active) ?? TABS[0]
+
+  return (
+    <div className="view-enter px-6 py-6">
+      <PageTitle sub={tab.sub}>Explore</PageTitle>
+
+      <div role="tablist" aria-label="Explore" className="mt-5 mb-6 flex flex-wrap gap-2">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={t.id === active}
+            onClick={() => setActive(t.id)}
+            className={`rounded-full px-4 py-2 text-[13px] font-medium transition-colors ${
+              t.id === active
+                ? 'bg-ember text-ink'
+                : 'border border-line hover:border-dust hover:bg-panel'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab.panel()}
     </div>
   )
 }

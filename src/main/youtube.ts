@@ -131,6 +131,8 @@ interface Entry {
   duration?: number
   channel?: string
   uploader?: string
+  channel_id?: string
+  channel_url?: string
   thumbnails?: { url?: string; width?: number }[]
 }
 
@@ -143,12 +145,57 @@ const toTrack = (e: Entry): Track => ({
 })
 
 /** YouTube search results, in YouTube's own ranking. */
-export async function search(query: string, limit = 12): Promise<Track[]> {
+/** A search result together with the channel that uploaded it. */
+export interface SearchHit {
+  track: Track
+  channelId: string | null
+  channelName: string | null
+}
+
+/**
+ * Search, keeping the uploader's channel id.
+ *
+ * search() throws that away because a Track has no room for it and nothing in
+ * the music paths wants it. Following a channel does: names are not unique and
+ * channels rename themselves, so the id is the only durable handle.
+ */
+export async function searchEntries(query: string, limit = 12): Promise<SearchHit[]> {
   const data = JSON.parse(
     await runYtdlp([
       `ytsearch${limit}:${query}`,
       '--dump-single-json',
       '--flat-playlist',
+      '--no-warnings'
+    ])
+  )
+  return (data.entries ?? [])
+    .filter((e: Entry) => e?.id)
+    .map((e: Entry) => ({
+      track: toTrack(e),
+      channelId: e.channel_id ?? null,
+      channelName: e.channel ?? e.uploader ?? null
+    }))
+}
+
+export async function search(query: string, limit = 12): Promise<Track[]> {
+  return (await searchEntries(query, limit)).map((hit) => hit.track)
+}
+
+/**
+ * A channel's recent uploads, newest first.
+ *
+ * `--playlist-end` is what keeps this cheap: a channel's uploads playlist can
+ * run to thousands of entries, and without it yt-dlp walks the whole thing
+ * before returning anything.
+ */
+export async function channelUploads(channelId: string, limit = 12): Promise<Track[]> {
+  const data = JSON.parse(
+    await runYtdlp([
+      `https://www.youtube.com/channel/${channelId}/videos`,
+      '--dump-single-json',
+      '--flat-playlist',
+      '--playlist-end',
+      String(limit),
       '--no-warnings'
     ])
   )
