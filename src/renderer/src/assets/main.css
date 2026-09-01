@@ -22,6 +22,10 @@
   --color-line: #2a2724;
   --color-ember: #ff7a45;
   --color-flare: #ffb865;
+  /* The deep end of the liked/artwork gradient: ember with the light taken out.
+     It was a bare #c0392b in two components, which meant the one colour in the
+     app that could not follow an accent. */
+  --color-forge: #c0392b;
   --color-chalk: #f5f1ec;
   --color-ash: #8c857d;
   --color-dust: #5d564f;
@@ -34,6 +38,112 @@
   --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
 
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/*
+  The bloom's fill, factored out of the gradient so it can follow the accent.
+  It is not simply `--color-ember` at an alpha: on ink a 55% wash reads as
+  light spilling out from behind the row, on paper that same wash reads as a
+  stain, so the amount is a per-theme decision and the hue is not.
+*/
+:root {
+  --glow: color-mix(in srgb, var(--color-ember) 55%, transparent);
+  /* Native controls follow the theme from this alone: without it an unchecked
+     checkbox is a stark white box on near-black, louder than the ember it is
+     meant to sit quieter than. */
+  color-scheme: dark;
+}
+
+/*
+  Light mode.
+
+  The greyscale stays WARM here for the same reason it is warm in the dark: on
+  a cool grey, ember stops reading as a filament and starts reading as a
+  warning label, and that substitution is the whole identity of the app.
+
+  These are not the dark values inverted — inverting the hex puts ash at
+  roughly 2:1 on the page and silently destroys every piece of secondary text
+  in the interface. They were rebuilt to hold the dark theme's contrast
+  ratios: against panel, chalk 15.3:1, ash 5.1:1, dust 2.8:1, versus 16.8 /
+  5.2 / 2.6 in the dark.
+
+  Surfaces reverse direction: elevation is lighter than the page in the dark
+  and darker than it here. That keeps every existing `hover:bg-panel` and
+  `bg-raised` meaning "nearer to you" without one component changing.
+*/
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-ink: #fbf8f3;
+  --color-panel: #f2ece3;
+  --color-raised: #e9e2d6;
+  --color-lifted: #ded5c6;
+  --color-line: #d5cabb;
+  --color-chalk: #191614;
+  --color-ash: #6b6259;
+  --color-dust: #948c82;
+
+  --color-ember: #b0401a;
+  --color-flare: #c2611c;
+  --color-forge: #8a2f14;
+
+  --glow: color-mix(in srgb, var(--color-ember) 20%, transparent);
+}
+
+/*
+  Accents.
+
+  An accent owns exactly three tokens, because ember is rationed to two
+  meanings — "this is playing" and "this is the primary action" — and flare
+  and forge are only its highlight and its shadow. Widening that set would
+  hand a theme the power to repaint the interface, which is precisely what the
+  rationing exists to prevent.
+
+  Each value is picked against both backgrounds, not lightened and reused:
+  ember carries `text-ink` on a filled button *and* appears as 13px text on
+  panel, so a hue bright enough to sit on ink is unreadable on paper. The dark
+  set lands near 7:1 on panel, the light set near 5:1.
+*/
+:root[data-accent='plasma'] {
+  --color-ember: #b98cff;
+  --color-flare: #dcb8ff;
+  --color-forge: #5b32a8;
+}
+
+:root[data-accent='halide'] {
+  --color-ember: #3fd2c7;
+  --color-flare: #93eee6;
+  --color-forge: #0d7d78;
+}
+
+:root[data-accent='phosphor'] {
+  --color-ember: #5fd97e;
+  --color-flare: #a6f0b4;
+  --color-forge: #1c8347;
+}
+
+/*
+  These carry two attributes on purpose. The light block above holds the
+  Classic accent so that a document with no data-accent yet — the frame before
+  applyTheme runs, or a window opened without it — is still coherent rather
+  than half-lit; the extra attribute is what stops that fallback from beating
+  a chosen accent in light mode.
+*/
+:root[data-theme='light'][data-accent='plasma'] {
+  --color-ember: #7b3fd4;
+  --color-flare: #9a63e8;
+  --color-forge: #4a1f96;
+}
+
+:root[data-theme='light'][data-accent='halide'] {
+  --color-ember: #0b6f6a;
+  --color-flare: #128f89;
+  --color-forge: #084e4b;
+}
+
+:root[data-theme='light'][data-accent='phosphor'] {
+  --color-ember: #227a45;
+  --color-flare: #2f9455;
+  --color-forge: #14522f;
 }
 
 @layer base {
@@ -103,7 +213,7 @@
 
   /* The signature: warm light behind whatever is playing. */
   .bloom {
-    background: radial-gradient(circle, rgb(255 122 69 / 0.55) 0%, transparent 70%);
+    background: radial-gradient(circle, var(--glow) 0%, transparent 70%);
     animation: bloom 3.2s ease-in-out infinite;
   }
 
@@ -121,12 +231,21 @@
     overflow: hidden;
     background: var(--color-raised);
   }
+  /* The sweep is chalk, not white. Chalk is whichever end of the greyscale the
+     text sits at, so it is always the colour furthest from the skeleton it
+     crosses; a literal white was invisible on a light surface and the
+     placeholder just sat there looking broken. */
   .shimmer::after {
     content: '';
     position: absolute;
     inset: 0;
     transform: translateX(-100%);
-    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.045), transparent);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-chalk) 6%, transparent),
+      transparent
+    );
     animation: shimmer 1.6s infinite;
   }
 }

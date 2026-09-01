@@ -8,11 +8,20 @@ import { lyricsApi } from './features/lyrics'
 import { offlineApi } from './features/offline'
 import { exploreApi } from './features/explore'
 import { albumsApi } from './features/albums'
+import { settingsApi } from './features/settings'
 
 import { invoke } from './invoke'
 
 // The renderer's entire view of the main process. Everything is a typed invoke;
 // nothing from node or electron leaks through.
+/** The now-playing snapshot the main window pushes to the mini player. */
+export interface MiniState {
+  title: string | null
+  artist: string | null
+  playing: boolean
+  thumbnailUrl: string | null
+}
+
 const api = {
   dbStats: () => invoke<{ tracks: number; playlists: number; likes: number }>('db:stats'),
   search: (query: string) => invoke<Track[]>('yt:search', query),
@@ -32,9 +41,30 @@ const api = {
     }
   },
 
-  /** Pushes what is playing to the tray. Fire-and-forget; main never answers. */
-  setNowPlaying: (state: { title: string | null; artist: string | null; playing: boolean }) =>
-    ipcRenderer.send('player:state', state),
+  /** Pushes what is playing to the tray and the mini player. Fire-and-forget. */
+  setNowPlaying: (state: {
+    title: string | null
+    artist: string | null
+    playing: boolean
+    thumbnailUrl?: string | null
+  }) => ipcRenderer.send('player:state', state),
+
+  mini: {
+    /** Opens or closes the compact always-on-top window. Resolves to the new state. */
+    toggle: () => invoke<boolean>('mini:toggle'),
+    isOpen: () => invoke<boolean>('mini:isOpen'),
+    close: () => invoke<boolean>('mini:close'),
+    /** The mini window subscribes to snapshots pushed from the main window. */
+    onState: (handler: (state: MiniState) => void): (() => void) => {
+      const listener = (_e: unknown, state: MiniState): void => handler(state)
+      ipcRenderer.on('mini:state', listener)
+      return () => {
+        ipcRenderer.off('mini:state', listener)
+      }
+    },
+    /** Drives playback from the mini window, over the same channel as the media keys. */
+    command: (command: MediaCommand) => ipcRenderer.send('mini:command', command)
+  },
 
   /** Which service a pasted link belongs to, and whether its keys are present. */
   detectImport: (input: string) =>
@@ -61,6 +91,11 @@ const api = {
     play: (track: Track) => invoke<void>('lib:play', track),
     like: (track: Track, liked: boolean) => invoke<boolean>('lib:like', track, liked),
     likes: () => invoke<SavedTrack[]>('lib:likes'),
+    /** Thumbs-down: de-weights this track's genre and artist everywhere. */
+    dislike: (track: Track, disliked: boolean) => invoke<boolean>('lib:dislike', track, disliked),
+    dislikes: () => invoke<SavedTrack[]>('lib:dislikes'),
+    /** Marks the latest play of this track as a skip — a mild negative signal. */
+    skipped: (videoId: string) => invoke<void>('lib:skipped', videoId),
     recent: (limit?: number) => invoke<SavedTrack[]>('lib:recent', limit),
     top: (limit?: number) => invoke<(SavedTrack & { plays: number })[]>('lib:top', limit),
     recommended: (limit?: number) => invoke<SavedTrack[]>('lib:recommended', limit),
@@ -96,7 +131,8 @@ const api = {
   lyrics: lyricsApi,
   offline: offlineApi,
   explore: exploreApi,
-  albums: albumsApi
+  albums: albumsApi,
+  settings: settingsApi
 }
 
 export type Api = typeof api

@@ -2,6 +2,7 @@ import { Compass, Heart, ListMusic, Search, Tag, User } from 'lucide-react'
 import type { SavedTrack } from '../../preload'
 import { usePlayer, useNav } from './store'
 import { useLibrary } from './useLibrary'
+import { TrackCard } from './TrackRow'
 import { Card, CardSkeletons, Empty, Eyebrow, Shelf } from './ui'
 
 /** Local hour decides the greeting. Small touch, but it makes the app feel awake. */
@@ -28,8 +29,6 @@ function TrackShelf({
   loading: boolean
   subtitle?: (t: SavedTrack) => string
 }): React.JSX.Element | null {
-  const { playNow, current } = usePlayer()
-
   // An empty row is worse than no row: it implies something is broken. Rows that
   // have nothing to say simply do not render.
   if (!loading && !tracks.length) return null
@@ -42,15 +41,7 @@ function TrackShelf({
       ) : (
         <Shelf>
           {tracks.map((t, i) => (
-            <Card
-              key={t.videoId}
-              art={t.thumbnailUrl}
-              title={t.title}
-              subtitle={subtitle ? subtitle(t) : (t.artist ?? 'Unknown artist')}
-              playing={current?.videoId === t.videoId}
-              onOpen={() => playNow(tracks, i)}
-              onPlay={() => playNow(tracks, i)}
-            />
+            <TrackCard key={t.videoId} track={t} list={tracks} index={i} subtitle={subtitle?.(t)} />
           ))}
         </Shelf>
       )}
@@ -128,7 +119,7 @@ export default function Home(): React.JSX.Element {
               onClick={() => go({ kind: 'liked' })}
               className="group flex items-center gap-4 overflow-hidden rounded-xl bg-panel p-3 text-left transition-colors duration-200 hover:bg-raised"
             >
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-flare via-ember to-[#c0392b]">
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-flare via-ember to-forge">
                 <Heart size={24} className="text-ink" fill="currentColor" />
               </div>
               <div className="min-w-0">

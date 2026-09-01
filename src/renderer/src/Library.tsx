@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { Heart, ListMusic, Pencil, Play, Shuffle, Tag, Trash2 } from 'lucide-react'
+import { Heart, ListMusic, Pencil, Play, Radio, Shuffle, Tag, Trash2 } from 'lucide-react'
 import type { SavedTrack } from '../../preload'
 import { usePlayer, useNav } from './store'
 import { useLibrary } from './useLibrary'
 import TrackRow from './TrackRow'
 import { Artwork, Empty, Eyebrow, PageTitle, RowSkeletons } from './ui'
 
-/** Play / shuffle header shared by every track-list page. */
+const pill =
+  'flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-line px-5 py-2.5 text-[13px] font-medium transition-colors hover:border-dust hover:bg-panel disabled:opacity-25'
+
+/** Play / shuffle / radio header shared by every track-list page. */
 function ListHeader({
   title,
   subtitle,
@@ -18,11 +21,13 @@ function ListHeader({
   tracks: SavedTrack[]
   art?: React.ReactNode
 }): React.JSX.Element {
-  const { playNow, toggleShuffle, shuffle } = usePlayer()
+  const { playNow, toggleShuffle, shuffle, startRadio } = usePlayer()
   return (
-    <div className="mb-6 flex items-end gap-5">
+    // Wraps because the content pane is ~620px with the queue open: artwork, a
+    // long playlist name and three actions do not fit on one line.
+    <div className="mb-6 flex flex-wrap items-end gap-x-5 gap-y-3">
       {art}
-      <div className="flex-1">
+      <div className="min-w-64 flex-1">
         <PageTitle sub={subtitle}>{title}</PageTitle>
       </div>
       <button
@@ -38,9 +43,16 @@ function ListHeader({
           playNow(tracks)
         }}
         disabled={!tracks.length}
-        className="flex items-center gap-2 rounded-full border border-line px-5 py-2.5 text-[13px] font-medium transition-colors hover:border-dust hover:bg-panel disabled:opacity-25"
+        className={pill}
       >
         <Shuffle size={15} /> Shuffle
+      </button>
+      <button
+        onClick={() => tracks[0] && startRadio(tracks[0], title)}
+        disabled={!tracks.length}
+        className={pill}
+      >
+        <Radio size={15} /> Start radio
       </button>
     </div>
   )
@@ -97,7 +109,7 @@ function TrackListPage({
 function LikedTile({ size = 'h-28 w-28' }: { size?: string }): React.JSX.Element {
   return (
     <div
-      className={`flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-flare via-ember to-[#c0392b] ${size}`}
+      className={`flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-flare via-ember to-forge ${size}`}
     >
       <Heart size={32} className="text-ink" fill="currentColor" />
     </div>
@@ -139,22 +151,8 @@ export function GenreView({ name }: { name: string }): React.JSX.Element {
   )
 }
 
-export function ArtistView({ name }: { name: string }): React.JSX.Element {
-  return (
-    <TrackListPage
-      cacheKey={`artist:${name}`}
-      title={name}
-      load={() => window.api.lib.byArtist(name, 100)}
-      empty={
-        <Empty
-          icon={Tag}
-          title={`Nothing by ${name}`}
-          hint="Search for this artist to pull their tracks into your library."
-        />
-      }
-    />
-  )
-}
+/** The artist page is substantial enough to live on its own. */
+export { default as ArtistView } from './artist/ArtistPage'
 
 export function PlaylistView({ id, title }: { id: number; title: string }): React.JSX.Element {
   const { libraryChanged, toast } = usePlayer()

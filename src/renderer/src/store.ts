@@ -10,29 +10,63 @@ export type Repeat = 'off' | 'all' | 'one'
  */
 export type QueueTrack = Track & { via?: string }
 
+/**
+ * Preferences that survive a restart.
+ *
+ * Volume, shuffle and repeat are persisted as the *live* values rather than as
+ * a separate "default on launch" pair. The Settings page then edits the very
+ * same control the player bar does — one source of truth instead of two that
+ * can disagree — and "state on launch" falls out of persisting it.
+ */
 const AUTOPLAY_KEY = 'symus.autoplay'
+const CROSSFADE_KEY = 'symus.crossfade'
+const VOLUME_KEY = 'symus.volume'
+const SHUFFLE_KEY = 'symus.shuffle'
+const REPEAT_KEY = 'symus.repeat'
 
 /**
- * Autoplay is on unless the user turned it off.
- *
- * Guarded because this module is imported by the node test runner, where there
- * is no localStorage — an unguarded read throws at import time and takes the
- * whole store, and every test that touches it, down with it.
+ * Every storage touch is guarded because this module is imported by the node
+ * test runner, where there is no localStorage — an unguarded read throws at
+ * import time and takes the whole store, and every test that touches it, down.
  */
-const storedAutoplay = (): boolean => {
+const persist = (key: string, value: string): void => {
   try {
-    return globalThis.localStorage?.getItem(AUTOPLAY_KEY) !== 'off'
-  } catch {
-    return true
-  }
-}
-
-const rememberAutoplay = (on: boolean): void => {
-  try {
-    globalThis.localStorage?.setItem(AUTOPLAY_KEY, on ? 'on' : 'off')
+    globalThis.localStorage?.setItem(key, value)
   } catch {
     /* no storage here; the setting simply does not persist */
   }
+}
+
+const read = (key: string): string | null => {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? null
+  } catch {
+    return null
+  }
+}
+
+const persistBool = (key: string, on: boolean): void => persist(key, on ? 'on' : 'off')
+
+const storedBool = (key: string, fallback: boolean): boolean => {
+  const raw = read(key)
+  return raw === 'on' ? true : raw === 'off' ? false : fallback
+}
+
+/**
+ * Range-checked, not merely parsed. These come out of a file the user can edit
+ * by hand and out of older builds that wrote other shapes; a stored volume of
+ * `50` would arrive as a 5000% gain on the next launch.
+ */
+const storedNumber = (key: string, fallback: number, min: number, max: number): number => {
+  const raw = read(key)?.trim()
+  const n = raw ? Number(raw) : NaN
+  return Number.isFinite(n) && n >= min && n <= max ? n : fallback
+}
+
+/** Same validation, for a union that has no numeric range to check. */
+const storedRepeat = (): Repeat => {
+  const raw = read(REPEAT_KEY)
+  return raw === 'all' || raw === 'one' ? raw : 'off'
 }
 
 const HISTORY_CAP = 50
@@ -64,6 +98,8 @@ interface Player {
 
   /** videoIds of liked tracks. A Set so every row can ask in O(1) while rendering. */
   liked: Set<string>
+  /** videoIds the user marked "not interested". */
+  disliked: Set<string>
   /** Bumped on every write to the library, so views know to refetch. */
   libraryVersion: number
 
@@ -78,6 +114,13 @@ interface Player {
   /** Whether the lyrics panel is showing instead of the queue. */
   lyricsOpen: boolean
 
+  /** Epoch ms at which playback should stop, or null for no timer. */
+  sleepAt: number | null
+  /** Stop when the current track finishes, rather than at a wall-clock time. */
+  sleepOnTrackEnd: boolean
+  /** Seconds of overlap between tracks. 0 disables it. */
+  crossfade: number
+
   playNow: (tracks: Track[], index?: number) => void
   addToQueue: (tracks: Track[]) => void
   playNext: (tracks: Track[]) => void
@@ -91,10 +134,16 @@ interface Player {
   toggleMute: () => void
   toggleShuffle: () => void
   cycleRepeat: () => void
+  setRepeat: (repeat: Repeat) => void
   toast: (message: string) => void
 
   setAutoplay: (on: boolean) => void
   toggleLyrics: () => void
+  /** minutes = a countdown, 'track' = stop at the end of this track, null = off. */
+  setSleep: (minutes: number | 'track' | null) => void
+  /** Fired when the timer expires: pauses and clears itself. */
+  endSleep: () => void
+  setCrossfade: (seconds: number) => void
   notePlayed: (videoId: string) => void
   /** Fills an empty queue with similar tracks. No-op unless autoplay applies. */
   autoplayIfIdle: () => Promise<void>
@@ -103,6 +152,7 @@ interface Player {
 
   refreshLikes: () => Promise<void>
   toggleLike: (track: Track) => Promise<void>
+  toggleDislike: (track: Track) => Promise<void>
   /** Call after any library mutation made outside the store, so views refetch. */
   libraryChanged: () => void
 }
@@ -114,18 +164,24 @@ export const usePlayer = create<Player>((set, get) => ({
   history: [],
   current: null,
   playing: false,
-  volume: 1,
+  volume: storedNumber(VOLUME_KEY, 1, 0, 1),
+  // Mute is deliberately not persisted: it is a momentary "quiet, someone is at
+  // the door", not a preference, and a silent app after a restart reads as broken.
   muted: false,
-  shuffle: false,
-  repeat: 'off',
+  shuffle: storedBool(SHUFFLE_KEY, false),
+  repeat: storedRepeat(),
   toasts: [],
   liked: new Set<string>(),
+  disliked: new Set<string>(),
   libraryVersion: 0,
-  autoplay: storedAutoplay(),
+  autoplay: storedBool(AUTOPLAY_KEY, true),
   filling: false,
   sessionPlayed: new Set<string>(),
   radioSeed: null,
   lyricsOpen: false,
+  sleepAt: null,
+  sleepOnTrackEnd: false,
+  crossfade: storedNumber(CROSSFADE_KEY, 0, 0, 12),
 
   playNow: (tracks, index = 0) =>
     set((s) => ({
@@ -201,11 +257,32 @@ export const usePlayer = create<Player>((set, get) => ({
   },
 
   setPlaying: (playing) => set({ playing }),
-  setVolume: (volume) => set({ volume, muted: false }),
+
+  // Clamped rather than trusted: the slider cannot leave 0–1, but the store is
+  // also driven by media keys and by whatever a future caller passes.
+  setVolume: (volume) => {
+    const clamped = Math.max(0, Math.min(1, volume))
+    persist(VOLUME_KEY, String(clamped))
+    set({ volume: clamped, muted: false })
+  },
+
   toggleMute: () => set((s) => ({ muted: !s.muted })),
-  toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
-  cycleRepeat: () =>
-    set((s) => ({ repeat: s.repeat === 'off' ? 'all' : s.repeat === 'all' ? 'one' : 'off' })),
+
+  toggleShuffle: () => {
+    const shuffle = !get().shuffle
+    persistBool(SHUFFLE_KEY, shuffle)
+    set({ shuffle })
+  },
+
+  setRepeat: (repeat) => {
+    persist(REPEAT_KEY, repeat)
+    set({ repeat })
+  },
+
+  cycleRepeat: () => {
+    const { repeat, setRepeat } = get()
+    setRepeat(repeat === 'off' ? 'all' : repeat === 'all' ? 'one' : 'off')
+  },
 
   toast: (message) => {
     const id = ++toastId
@@ -217,8 +294,25 @@ export const usePlayer = create<Player>((set, get) => ({
 
   toggleLyrics: () => set((s) => ({ lyricsOpen: !s.lyricsOpen })),
 
+  setSleep: (minutes) => {
+    if (minutes === null) return set({ sleepAt: null, sleepOnTrackEnd: false })
+    if (minutes === 'track') return set({ sleepAt: null, sleepOnTrackEnd: true })
+    set({ sleepAt: Date.now() + minutes * 60_000, sleepOnTrackEnd: false })
+  },
+
+  endSleep: () => {
+    set({ sleepAt: null, sleepOnTrackEnd: false, playing: false })
+    get().toast('Sleep timer reached — playback stopped')
+  },
+
+  setCrossfade: (seconds) => {
+    const clamped = Math.max(0, Math.min(12, Math.round(seconds)))
+    persist(CROSSFADE_KEY, String(clamped))
+    set({ crossfade: clamped })
+  },
+
   setAutoplay: (on) => {
-    rememberAutoplay(on)
+    persistBool(AUTOPLAY_KEY, on)
     set({ autoplay: on, ...(on ? {} : { radioSeed: null }) })
   },
 
@@ -292,26 +386,60 @@ export const usePlayer = create<Player>((set, get) => ({
   },
 
   refreshLikes: async () => {
-    const likes = await window.api.lib.likes()
-    set({ liked: new Set(likes.map((t) => t.videoId)) })
+    const [likes, dislikes] = await Promise.all([window.api.lib.likes(), window.api.lib.dislikes()])
+    set({
+      liked: new Set(likes.map((t) => t.videoId)),
+      disliked: new Set(dislikes.map((t) => t.videoId))
+    })
   },
 
   /**
    * Optimistic: the heart fills immediately and rolls back if the write fails.
    * A round trip before the icon moves makes the whole app feel laggy.
    */
+  /**
+   * Thumbs-down. Disliking clears any like, because holding both is meaningless
+   * — and the main process does the same, so the two never disagree.
+   */
+  toggleDislike: async (track) => {
+    const s = get()
+    const next = !s.disliked.has(track.videoId)
+    const disliked = new Set(s.disliked)
+    const liked = new Set(s.liked)
+    if (next) {
+      disliked.add(track.videoId)
+      liked.delete(track.videoId)
+    } else {
+      disliked.delete(track.videoId)
+    }
+    set({ disliked, liked })
+    try {
+      await window.api.lib.dislike(track, next)
+      get().libraryChanged()
+      if (next) get().toast(`Not interested — less like "${track.title}" from now on`)
+    } catch (err) {
+      set({ disliked: s.disliked, liked: s.liked })
+      get().toast(err instanceof Error ? err.message : String(err))
+    }
+  },
+
   toggleLike: async (track) => {
     const s = get()
     const next = !s.liked.has(track.videoId)
     const optimistic = new Set(s.liked)
-    if (next) optimistic.add(track.videoId)
-    else optimistic.delete(track.videoId)
-    set({ liked: optimistic })
+    const disliked = new Set(s.disliked)
+    if (next) {
+      optimistic.add(track.videoId)
+      disliked.delete(track.videoId)
+    } else {
+      optimistic.delete(track.videoId)
+    }
+    set({ liked: optimistic, disliked })
     try {
       await window.api.lib.like(track, next)
       get().libraryChanged()
     } catch (err) {
-      set({ liked: s.liked })
+      set({ liked: s.liked, disliked: s.disliked })
       get().toast(err instanceof Error ? err.message : String(err))
     }
   }

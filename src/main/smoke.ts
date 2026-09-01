@@ -2,6 +2,9 @@ import { app } from 'electron'
 import { prisma } from './db'
 import * as lib from './library'
 import * as imp from './import'
+import * as sh from './features/searchHistory'
+import * as lyr from './features/lyrics'
+import * as explore from './features/explore'
 import type { Track } from './youtube'
 
 /**
@@ -314,6 +317,152 @@ export async function smoke(): Promise<void> {
   ok(
     'rejects a sped-up edit',
     !imp.isConfidentMatch(want, yt('Blinding Lights (sped up)', 'The Weeknd'))
+  )
+
+  // -- dislikes feed the recommendation scorer ------------------------------
+  // "Not interested" must actually suppress, not merely fail to boost. Build a
+  // clean profile: like one genre, dislike another, then check both directions.
+  const wanted = track(30, 'Wanted Song', 'Wanted Artist')
+  const unwanted = track(31, 'Unwanted Song', 'Unwanted Artist')
+  const wantedSibling = track(32, 'Another Wanted', 'Wanted Artist')
+  const unwantedSibling = track(33, 'Another Unwanted', 'Unwanted Artist')
+  await lib.saveTracks([wanted, unwanted, wantedSibling, unwantedSibling])
+  await lib.setGenre(wanted.videoId, 'Folk')
+  await lib.setGenre(unwanted.videoId, 'Reggae')
+
+  await lib.setLiked(wanted, true)
+  ok('dislike is recorded', (await lib.setDisliked(unwanted, true)) === true)
+  ok('disliked tracks are listed', (await lib.dislikedTracks()).length === 1)
+
+  const profile = await lib.taste()
+  ok(
+    'a liked genre scores positive',
+    (profile.genre.get('Folk') ?? 0) > 0,
+    profile.genre.get('Folk')
+  )
+  ok(
+    'a disliked genre scores negative',
+    (profile.genre.get('Reggae') ?? 0) < 0,
+    profile.genre.get('Reggae')
+  )
+
+  const afterDislike = await lib.recommended(20)
+  ok(
+    'the disliked track is never recommended',
+    !afterDislike.some((t) => t.videoId === unwanted.videoId),
+    JSON.stringify(afterDislike.map((t) => t.title))
+  )
+  ok(
+    'a sibling of the disliked artist is suppressed',
+    !afterDislike.some((t) => t.videoId === unwantedSibling.videoId),
+    JSON.stringify(afterDislike.map((t) => t.title))
+  )
+  ok(
+    'a sibling of the liked artist survives',
+    afterDislike.some((t) => t.videoId === wantedSibling.videoId),
+    JSON.stringify(afterDislike.map((t) => t.title))
+  )
+
+  // Disliking clears a like: holding both is meaningless.
+  await lib.setLiked(unwanted, true)
+  await lib.setDisliked(unwanted, true)
+  ok(
+    'disliking clears an existing like',
+    !(await lib.likedTracks()).some((t) => t.videoId === unwanted.videoId)
+  )
+
+  // Radio must respect it too, not just the Home row.
+  const radioPool = await lib.similarTo(wanted, [], 10)
+  ok(
+    'radio never serves a disliked track',
+    !radioPool.some((t) => t.videoId === unwanted.videoId),
+    JSON.stringify(radioPool.map((t) => t.title))
+  )
+
+  await lib.setDisliked(unwanted, false)
+  ok('undoing a dislike removes it', (await lib.dislikedTracks()).length === 0)
+
+  // -- skips are a negative signal ------------------------------------------
+  await lib.recordPlay(wantedSibling)
+  await lib.markSkipped(wantedSibling.videoId)
+  const skippedRow = await prisma.historyEntry.findFirst({
+    where: { track: { videoId: wantedSibling.videoId } },
+    orderBy: { playedAt: 'desc' }
+  })
+  ok('a skip is recorded against the latest play', skippedRow?.skipped === true)
+
+  // -- search history --------------------------------------------------------
+  await sh.clearSearches()
+  ok('history starts empty', (await sh.recentSearches()).length === 0)
+  await sh.recordSearch('miles davis')
+  await sh.recordSearch('jazz piano')
+  await sh.recordSearch('miles davis')
+  const hist = await sh.recentSearches()
+  ok('records searches, most recent first', hist[0] === 'miles davis', JSON.stringify(hist))
+  ok('repeat searches dedupe rather than stacking', hist.length === 2, JSON.stringify(hist))
+  await sh.recordSearch('   ')
+  ok('blank searches are not recorded', (await sh.recentSearches()).length === 2)
+  await sh.clearSearches()
+  ok('clear empties the history', (await sh.recentSearches()).length === 0)
+
+  // -- lyrics: title cleaning and LRC parsing --------------------------------
+  ok(
+    'strips (Official Video)',
+    lyr.cleanQuery('The Weeknd - Blinding Lights (Official Video)', 'TheWeekndVEVO').title ===
+      'Blinding Lights'
+  )
+  ok(
+    'drops the - Topic channel suffix',
+    lyr.cleanQuery('Blinding Lights', 'The Weeknd - Topic').artist === 'The Weeknd'
+  )
+  ok(
+    'drops a trailing ft. credit',
+    lyr.cleanQuery('Daft Punk - Get Lucky (Official Audio) ft. Pharrell Williams', 'Daft Punk')
+      .title === 'Get Lucky'
+  )
+  ok(
+    'strips emoji',
+    lyr.cleanQuery('2 A.M Study Session 📚 [lofi hip hop]', 'Lofi Girl').title ===
+      '2 A.M Study Session'
+  )
+  ok(
+    'takes the artist from the dash when the channel is unknown',
+    lyr.cleanQuery('Nirvana - Something In The Way', null).artist === 'Nirvana'
+  )
+
+  // Real newlines: LRC is a line-based format, so a template literal is the
+  // honest representation.
+  const lrc = lyr.parseLrc(
+    ['[00:13.13] Yeah', '[00:16.56] ~', 'not timed', '[01:05.5] Later', '[00:29.96] Earlier'].join(
+      '\n'
+    )
+  )
+  ok('untimed lines are dropped', lrc.length === 4, lrc.length)
+  ok(
+    'lines are sorted by time',
+    JSON.stringify(lrc.map((l) => l.time)) === '[13.13,16.56,29.96,65.5]',
+    JSON.stringify(lrc.map((l) => l.time))
+  )
+  // A single-digit fraction is tenths. Treating it as hundredths drifted every
+  // such line by up to half a second.
+  ok('a one-digit fraction is tenths', lyr.parseLrc('[01:05.5] x')[0].time === 65.5)
+  ok('a three-digit fraction is milliseconds', lyr.parseLrc('[00:01.500] x')[0].time === 1.5)
+  ok('empty input parses to nothing', lyr.parseLrc('').length === 0)
+
+  // -- explore shelf planning ------------------------------------------------
+  const plan = await explore.planShelves()
+  ok('explore plans at least one shelf', plan.length > 0, plan.length)
+  ok('explore caps the shelf count', plan.length <= 6, plan.length)
+  ok(
+    'every shelf has a query',
+    plan.every((sh2) => sh2.query.trim().length > 0)
+  )
+  ok('shelf ids are unique', new Set(plan.map((sh2) => sh2.id)).size === plan.length)
+  // Honest labelling is a product requirement, not a style preference.
+  ok(
+    'no shelf claims to be a chart',
+    !plan.some((sh2) => /\bcharts?\b|\btrending\b|\btop 100\b/i.test(sh2.title)),
+    JSON.stringify(plan.map((sh2) => sh2.title))
   )
 
   await lib.deletePlaylist(id)

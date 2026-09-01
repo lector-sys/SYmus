@@ -16,6 +16,8 @@ import { registerLyrics } from './features/lyrics'
 import { registerOffline } from './features/offline'
 import { registerExplore } from './features/explore'
 import { registerAlbums } from './features/albums'
+import { registerSettings, loadSettings, shouldMinimizeToTray } from './features/settings'
+import { registerMini, pushToMini } from './mini'
 
 registerStreamScheme()
 // Media keys and queue advances have no user gesture behind them, and Chromium
@@ -30,7 +32,9 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#09090b',
+    // Stays dark in light mode too: this is only visible for the frame before
+    // the renderer paints, and a white flash is far worse than a dark one.
+    backgroundColor: '#0a0908',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -46,8 +50,10 @@ function createWindow(): BrowserWindow {
 
   // Closing the window hides to the tray: a music player that stops when you
   // click X is not one you would leave running. Quit lives in the tray menu.
+  // Settings can turn that off, in which case X means quit — read from the
+  // cached value, because a close event cannot wait on a query.
   mainWindow.on('close', (event) => {
-    if (isQuitting()) return
+    if (isQuitting() || !shouldMinimizeToTray()) return
     event.preventDefault()
     mainWindow.hide()
   })
@@ -133,6 +139,11 @@ async function start(): Promise<void> {
     lib.setLiked(TrackShape.parse(track), Boolean(liked))
   )
   ipcMain.handle('lib:likes', () => lib.likedTracks())
+  ipcMain.handle('lib:dislike', (_e, track, disliked) =>
+    lib.setDisliked(TrackShape.parse(track), Boolean(disliked))
+  )
+  ipcMain.handle('lib:dislikes', () => lib.dislikedTracks())
+  ipcMain.handle('lib:skipped', (_e, videoId) => lib.markSkipped(VideoId.parse(videoId)))
   ipcMain.handle('lib:recent', (_e, limit) => lib.recentlyPlayed(Limit.parse(limit)))
   ipcMain.handle('lib:top', (_e, limit) => lib.mostPlayed(Limit.parse(limit)))
   ipcMain.handle('lib:recommended', (_e, limit) => lib.recommended(Limit.parse(limit)))
@@ -200,10 +211,14 @@ async function start(): Promise<void> {
     registerLyrics,
     registerOffline,
     registerExplore,
-    registerAlbums
+    registerAlbums,
+    registerSettings
   ]) {
     register(ipcMain)
   }
+
+  // Before the window exists: its close handler reads this synchronously.
+  await loadSettings()
 
   const window = createWindow()
   setupTray(window, icon)
@@ -211,14 +226,24 @@ async function start(): Promise<void> {
   // The tray label and tooltip are the only place the OS shows what is playing,
   // so the renderer pushes every change. `send`, not `invoke`: nothing to answer.
   ipcMain.on('player:state', (_e, next) => {
-    setNowPlaying(
-      {
-        title: next?.title ? String(next.title).slice(0, 200) : null,
-        artist: next?.artist ? String(next.artist).slice(0, 200) : null,
-        playing: Boolean(next?.playing)
-      },
-      window
-    )
+    const state = {
+      title: next?.title ? String(next.title).slice(0, 200) : null,
+      artist: next?.artist ? String(next.artist).slice(0, 200) : null,
+      playing: Boolean(next?.playing),
+      thumbnailUrl: next?.thumbnailUrl ? String(next.thumbnailUrl).slice(0, 2000) : null
+    }
+    setNowPlaying(state, window)
+    // The mini player is a separate renderer with its own store, so it is fed
+    // from the same snapshot the tray uses rather than reading state directly.
+    pushToMini(state)
+  })
+
+  registerMini(window, icon)
+
+  // Commands from the mini window are relayed to the main window, which owns
+  // the player, on the same channel the tray and media keys use.
+  ipcMain.on('mini:command', (_e, command) => {
+    if (!window.isDestroyed()) window.webContents.send('media', command)
   })
 
   app.on('activate', () => {

@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Heart, ListEnd, ListPlus, Plus, Tag, Trash2 } from 'lucide-react'
+import {
+  Check,
+  Heart,
+  Infinity as InfinityIcon,
+  ListEnd,
+  ListPlus,
+  Plus,
+  Tag,
+  ThumbsDown,
+  Trash2
+} from 'lucide-react'
 import type { SavedTrack, Track } from '../../preload'
 import { fmt, usePlayer } from './store'
 import { GENRE_CHOICES } from './genres'
-import { Artwork, Equalizer } from './ui'
+import { Artwork, Card, Equalizer } from './ui'
 
 /** Closes a popover on outside click and on Escape. */
 function useDismiss(open: boolean, close: () => void): React.RefObject<HTMLDivElement | null> {
@@ -167,6 +177,134 @@ function GenreTag({ track }: { track: SavedTrack }): React.JSX.Element {
   )
 }
 
+/**
+ * Right-click menu. Every track action in one place, on every list in the app —
+ * the hover icons only have room for the common few.
+ *
+ * Positioned fixed at the cursor and clamped to the viewport, so a row near the
+ * bottom edge does not open a menu off-screen.
+ */
+function ContextMenu({
+  at,
+  track,
+  onClose,
+  onRemove
+}: {
+  at: { x: number; y: number }
+  track: SavedTrack | Track
+  onClose: () => void
+  onRemove?: () => void
+}): React.JSX.Element {
+  const ref = useDismiss(true, onClose)
+  const { playNext, addToQueue, startRadio, liked, disliked, toggleLike, toggleDislike, filling } =
+    usePlayer()
+  const isLiked = liked.has(track.videoId)
+  const isDisliked = disliked.has(track.videoId)
+
+  const [pos, setPos] = useState(at)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const box = el.getBoundingClientRect()
+    setPos({
+      x: Math.min(at.x, window.innerWidth - box.width - 8),
+      y: Math.min(at.y, window.innerHeight - box.height - 8)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const run = (fn: () => void) => () => {
+    fn()
+    onClose()
+  }
+
+  const row = 'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px]'
+
+  return (
+    <div
+      ref={ref}
+      style={{ left: pos.x, top: pos.y }}
+      className="fixed z-50 w-56 rounded-lg border border-line bg-panel p-1 shadow-2xl shadow-ink/70"
+    >
+      <button onClick={run(() => playNext([track]))} className={`${row} hover:bg-lifted`}>
+        <ListPlus size={14} className="text-ash" /> Play next
+      </button>
+      <button onClick={run(() => addToQueue([track]))} className={`${row} hover:bg-lifted`}>
+        <ListEnd size={14} className="text-ash" /> Add to queue
+      </button>
+      <button
+        onClick={run(() => void startRadio(track))}
+        disabled={filling}
+        className={`${row} hover:bg-lifted disabled:opacity-40`}
+      >
+        <InfinityIcon size={14} className="text-ash" /> Start radio
+      </button>
+
+      <div className="my-1 h-px bg-line" />
+
+      <button onClick={run(() => void toggleLike(track))} className={`${row} hover:bg-lifted`}>
+        <Heart size={14} className={isLiked ? 'text-ember' : 'text-ash'} />
+        {isLiked ? 'Remove from liked songs' : 'Add to liked songs'}
+      </button>
+      <button onClick={run(() => void toggleDislike(track))} className={`${row} hover:bg-lifted`}>
+        <ThumbsDown size={14} className={isDisliked ? 'text-ember' : 'text-ash'} />
+        {isDisliked ? 'Undo not interested' : 'Not interested'}
+      </button>
+
+      {onRemove && (
+        <>
+          <div className="my-1 h-px bg-line" />
+          <button onClick={run(onRemove)} className={`${row} hover:bg-lifted`}>
+            <Trash2 size={14} className="text-ash" /> Remove from this playlist
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A shelf card for a track, carrying the same right-click menu as a track row —
+ * play next / add to queue / radio / like have to be reachable from Home and
+ * Explore too, not only from the list views.
+ */
+export function TrackCard({
+  track,
+  list,
+  index,
+  subtitle
+}: {
+  track: SavedTrack | Track
+  list: (SavedTrack | Track)[]
+  index: number
+  subtitle?: string
+}): React.JSX.Element {
+  const { playNow, current } = usePlayer()
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
+
+  return (
+    // The wrapper only carries the handler; ContextMenu positions itself fixed.
+    // shrink-0 because it replaces Card as the shelf's flex item.
+    <div
+      className="shrink-0"
+      onContextMenu={(e) => {
+        e.preventDefault()
+        setMenuAt({ x: e.clientX, y: e.clientY })
+      }}
+    >
+      {menuAt && <ContextMenu at={menuAt} track={track} onClose={() => setMenuAt(null)} />}
+      <Card
+        art={track.thumbnailUrl}
+        title={track.title}
+        subtitle={subtitle ?? track.artist ?? 'Unknown artist'}
+        playing={current?.videoId === track.videoId}
+        onOpen={() => playNow(list, index)}
+        onPlay={() => playNow(list, index)}
+      />
+    </div>
+  )
+}
+
 interface Props {
   track: SavedTrack | Track
   /** Playing this row plays the whole list from here, so the queue keeps its context. */
@@ -185,18 +323,33 @@ export default function TrackRow({
   showGenre,
   onRemove
 }: Props): React.JSX.Element {
-  const { playNow, playNext, addToQueue, current, playing, liked, toggleLike } = usePlayer()
+  const { playNow, playNext, addToQueue, current, playing, liked, disliked, toggleLike } =
+    usePlayer()
   const isCurrent = current?.videoId === track.videoId
   const isLiked = liked.has(track.videoId)
+  const isDisliked = disliked.has(track.videoId)
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
 
   const action = 'text-ash opacity-0 transition-colors hover:text-chalk group-hover:opacity-100'
 
   return (
     <div
+      onContextMenu={(e) => {
+        e.preventDefault()
+        setMenuAt({ x: e.clientX, y: e.clientY })
+      }}
       className={`group relative flex items-center gap-3 rounded-lg py-2 pr-3 pl-4 transition-colors duration-150 ${
         isCurrent ? 'bg-ember/[0.07]' : 'hover:bg-panel'
-      }`}
+      } ${isDisliked ? 'opacity-45' : ''}`}
     >
+      {menuAt && (
+        <ContextMenu
+          at={menuAt}
+          track={track}
+          onRemove={onRemove}
+          onClose={() => setMenuAt(null)}
+        />
+      )}
       {/* The lit edge. Only the playing row gets it. */}
       {isCurrent && (
         <span

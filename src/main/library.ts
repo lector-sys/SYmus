@@ -359,64 +359,36 @@ export const tracksByGenre = async (genre: string, limit = 40): Promise<SavedTra
   ).map(toSaved)
 
 /**
- * "Made for you": library tracks weighted by how much the user likes their genre
- * and artist. Likes count double — an explicit like is a stronger signal than a
- * play, which might just be a track that came up in a queue.
+ * "Made for you": library tracks weighted by how much the user likes their
+ * genre and artist, from the shared taste profile — likes, plays, skips and
+ * dislikes all feed in.
  *
- * Deliberately excludes the tracks that built the profile (likes, top plays):
- * a recommendation row that lists your five favourite songs back at you is a
- * mirror, not a suggestion.
+ * Excludes the tracks that built the profile: a recommendation row that lists
+ * your five favourite songs back at you is a mirror, not a suggestion. Also
+ * excludes anything scoring at or below zero, so a disliked genre cannot be
+ * padded back in just because nothing better is left.
  *
- * ponytail: two weighted counters and a sort. No ML, no embeddings; the
- * library is a few thousand rows at most.
+ * ponytail: two weighted maps and a sort. No ML; the library is a few thousand
+ * rows at most.
  */
 export async function recommended(limit = 20): Promise<SavedTrack[]> {
-  const [likes, plays] = await Promise.all([
-    prisma.like.findMany({
-      select: { track: { select: { id: true, artist: true, genre: true } } }
-    }),
-    prisma.historyEntry.groupBy({
-      by: ['trackId'],
-      _count: { trackId: true },
-      orderBy: { _count: { trackId: 'desc' } },
-      take: 100
-    })
-  ])
+  const { genre, artist, exclude, disliked } = await taste()
+  if (!genre.size && !artist.size) return []
 
-  const genreScore = new Map<string, number>()
-  const artistScore = new Map<string, number>()
-  const seed = new Set<number>()
-  const bump = (m: Map<string, number>, k: string | null, n: number): void => {
-    if (k) m.set(k, (m.get(k) ?? 0) + n)
-  }
+  const wanted = (m: Map<string, number>): string[] =>
+    [...m.entries()].filter(([, n]) => n > 0).map(([k]) => k)
 
-  for (const { track } of likes) {
-    seed.add(track.id)
-    bump(genreScore, track.genre, 2)
-    bump(artistScore, track.artist, 2)
-  }
-
-  if (plays.length) {
-    const played = await prisma.track.findMany({
-      where: { id: { in: plays.map((p) => p.trackId) } },
-      select: { id: true, artist: true, genre: true }
-    })
-    const count = new Map(plays.map((p) => [p.trackId, p._count.trackId]))
-    for (const t of played) {
-      // Log-damped: 40 plays of one song should not drown out the rest of the taste profile.
-      const weight = Math.log2(1 + (count.get(t.id) ?? 1))
-      bump(genreScore, t.genre, weight)
-      bump(artistScore, t.artist, weight)
-    }
-    for (const t of played.slice(0, 10)) seed.add(t.id)
-  }
-
-  if (!genreScore.size && !artistScore.size) return []
+  const genreKeys = wanted(genre)
+  const artistKeys = wanted(artist)
+  if (!genreKeys.length && !artistKeys.length) return []
 
   const pool = await prisma.track.findMany({
     where: {
-      id: { notIn: [...seed] },
-      OR: [{ genre: { in: [...genreScore.keys()] } }, { artist: { in: [...artistScore.keys()] } }]
+      id: { notIn: [...exclude, ...disliked] },
+      OR: [
+        ...(genreKeys.length ? [{ genre: { in: genreKeys } }] : []),
+        ...(artistKeys.length ? [{ artist: { in: artistKeys } }] : [])
+      ]
     },
     orderBy: { addedAt: 'desc' },
     take: 500,
@@ -426,25 +398,14 @@ export async function recommended(limit = 20): Promise<SavedTrack[]> {
   return pool
     .map((t) => ({
       t,
-      score: (genreScore.get(t.genre ?? '') ?? 0) + (artistScore.get(t.artist ?? '') ?? 0)
+      score: (genre.get(t.genre ?? '') ?? 0) + (artist.get(t.artist ?? '') ?? 0)
     }))
+    .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((s) => toSaved(s.t))
 }
 
-/**
- * Tracks similar to a seed, for autoplay and radio.
- *
- * Scored the same way as recommended(), but anchored on one track rather than
- * on the whole taste profile: genre match outranks artist match, and play count
- * only breaks ties. `exclude` carries the videoIds already played this session
- * so a radio session cannot loop.
- *
- * Local library first. If that cannot fill the request, falls back to a YouTube
- * search seeded from the track, saving whatever it finds — the same path a
- * manual search takes, so autoplay grows the library instead of bypassing it.
- */
 export async function similarTo(
   seed: Track,
   exclude: string[] = [],
@@ -466,6 +427,10 @@ export async function similarTo(
     ).map((g) => [g.trackId, g._count.trackId])
   )
 
+  // Disliked tracks are never served, however well they otherwise score.
+  const profile = await taste()
+  const dislikedIds = [...profile.disliked]
+
   const match: Array<{ genre?: string; artist?: string }> = []
   if (genre) match.push({ genre })
   if (seed.artist) match.push({ artist: seed.artist })
@@ -473,7 +438,7 @@ export async function similarTo(
   let picked: SavedTrack[] = []
   if (match.length) {
     const pool = await prisma.track.findMany({
-      where: { OR: match, videoId: { notIn: [...skip] } },
+      where: { OR: match, videoId: { notIn: [...skip] }, id: { notIn: dislikedIds } },
       take: 300,
       select: { id: true, ...SELECT }
     })
@@ -481,12 +446,17 @@ export async function similarTo(
       .map((t) => ({
         t,
         // Genre is the stronger signal: the same artist twice in a row is a
-        // rut, whereas the same genre is what "similar" actually means.
+        // rut, whereas the same genre is what "similar" actually means. The
+        // taste profile then nudges by how the user feels about that genre and
+        // artist overall, so a disliked genre sinks even when it matches.
         score:
           (genre && t.genre === genre ? 3 : 0) +
           (seed.artist && t.artist === seed.artist ? 2 : 0) +
-          Math.log2(1 + (plays.get(t.id) ?? 0))
+          Math.log2(1 + (plays.get(t.id) ?? 0)) +
+          Math.max(-3, (profile.genre.get(t.genre ?? '') ?? 0) * 0.4) +
+          Math.max(-3, (profile.artist.get(t.artist ?? '') ?? 0) * 0.4)
       }))
+      .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map((s) => toSaved(s.t))
@@ -528,4 +498,119 @@ export async function similarTo(
     }
   }
   return picked.slice(0, limit)
+}
+
+/**
+ * Thumbs-down. Deliberately not "the absence of a like": an explicit "not for
+ * me" is a signal, an unrated track is not, and only the former should push a
+ * track's genre and artist down the ranking.
+ *
+ * Disliking also clears any like, since holding both is meaningless.
+ */
+export async function setDisliked(track: Track, disliked: boolean): Promise<boolean> {
+  const trackId = await oneId(track)
+  if (disliked) {
+    await prisma.dislike.upsert({ where: { trackId }, create: { trackId }, update: {} })
+    await prisma.like.deleteMany({ where: { trackId } })
+  } else {
+    await prisma.dislike.deleteMany({ where: { trackId } })
+  }
+  return disliked
+}
+
+export async function dislikedTracks(): Promise<SavedTrack[]> {
+  const rows = await prisma.dislike.findMany({
+    orderBy: { dislikedAt: 'desc' },
+    select: { track: { select: SELECT } }
+  })
+  return rows.map((r) => toSaved(r.track))
+}
+
+/** Marks the most recent play of a track as skipped — a mild negative signal. */
+export async function markSkipped(videoId: string): Promise<void> {
+  const track = await prisma.track.findUnique({ where: { videoId }, select: { id: true } })
+  if (!track) return
+  const last = await prisma.historyEntry.findFirst({
+    where: { trackId: track.id },
+    orderBy: { playedAt: 'desc' },
+    select: { id: true }
+  })
+  if (last) await prisma.historyEntry.update({ where: { id: last.id }, data: { skipped: true } })
+}
+
+/**
+ * The user's taste as weights over genres and artists, from likes, plays,
+ * skips and dislikes.
+ *
+ * Extracted so recommended() and similarTo() score from the same profile —
+ * previously each built its own, and a dislike would have had to be taught to
+ * both.
+ */
+export interface Taste {
+  genre: Map<string, number>
+  artist: Map<string, number>
+  /** Track ids that formed the profile, or are explicitly unwanted. */
+  exclude: Set<number>
+  disliked: Set<number>
+}
+
+export async function taste(): Promise<Taste> {
+  const [likes, dislikes, plays] = await Promise.all([
+    prisma.like.findMany({
+      select: { track: { select: { id: true, artist: true, genre: true } } }
+    }),
+    prisma.dislike.findMany({
+      select: { track: { select: { id: true, artist: true, genre: true } } }
+    }),
+    prisma.historyEntry.groupBy({
+      by: ['trackId', 'skipped'],
+      _count: { trackId: true },
+      orderBy: { _count: { trackId: 'desc' } },
+      take: 300
+    })
+  ])
+
+  const genre = new Map<string, number>()
+  const artist = new Map<string, number>()
+  const exclude = new Set<number>()
+  const disliked = new Set<number>()
+  const bump = (m: Map<string, number>, k: string | null, n: number): void => {
+    if (k) m.set(k, (m.get(k) ?? 0) + n)
+  }
+
+  for (const { track } of likes) {
+    exclude.add(track.id)
+    bump(genre, track.genre, 2)
+    bump(artist, track.artist, 2)
+  }
+
+  // A dislike outweighs a like: getting an unwanted track again is worse than
+  // missing a wanted one, and the user had to go out of their way to say so.
+  for (const { track } of dislikes) {
+    exclude.add(track.id)
+    disliked.add(track.id)
+    bump(genre, track.genre, -3)
+    bump(artist, track.artist, -3)
+  }
+
+  if (plays.length) {
+    const ids = [...new Set(plays.map((p) => p.trackId))]
+    const rows = await prisma.track.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, artist: true, genre: true }
+    })
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    for (const p of plays) {
+      const t = byId.get(p.trackId)
+      if (!t) continue
+      // Log-damped so 40 plays of one song cannot drown out the rest of the
+      // profile. Skips count against, at half the weight of a completed play.
+      const weight = Math.log2(1 + p._count.trackId) * (p.skipped ? -0.5 : 1)
+      bump(genre, t.genre, weight)
+      bump(artist, t.artist, weight)
+    }
+    for (const p of plays.slice(0, 10)) exclude.add(p.trackId)
+  }
+
+  return { genre, artist, exclude, disliked }
 }

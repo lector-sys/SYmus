@@ -7,6 +7,9 @@ import {
   Play,
   Repeat,
   Repeat1,
+  Mic2,
+  Minimize2,
+  Moon,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -15,6 +18,7 @@ import {
   VolumeX
 } from 'lucide-react'
 import { fmt, usePlayer } from './store'
+import { useAudioEngine } from './audio'
 import { Artwork } from './ui'
 
 const icon = 'flex h-8 w-8 items-center justify-center rounded-full transition-colors duration-150'
@@ -80,6 +84,110 @@ function Scrubber({
   )
 }
 
+/** Sleep timer. Minutes, or "when this track ends". */
+function SleepTimer(): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const { sleepAt, sleepOnTrackEnd, setSleep } = usePlayer()
+  const ref = useRef<HTMLDivElement>(null)
+  const armed = sleepAt !== null || sleepOnTrackEnd
+
+  // Minutes left, held in state rather than computed during render: reading the
+  // clock while rendering is impure and makes the component's output depend on
+  // when React happened to run it.
+  const [remaining, setRemaining] = useState<number | null>(null)
+  useEffect(() => {
+    if (!sleepAt) {
+      // Clearing the countdown when the timer is turned off. Reading the clock
+      // is the external system here; there is nothing to derive this from.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRemaining(null)
+      return
+    }
+    const update = (): void =>
+      setRemaining(Math.max(0, Math.round((sleepAt - Date.now()) / 60_000)))
+    update()
+    const timer = setInterval(update, 30_000)
+    return () => clearInterval(timer)
+  }, [sleepAt])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const label = sleepOnTrackEnd
+    ? 'Stopping at the end of this track'
+    : remaining !== null
+      ? `Stopping in about ${remaining} min`
+      : 'Sleep timer'
+
+  const item = 'block w-full rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-lifted'
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title={label}
+        className={`${icon} ${armed ? lit : idle}`}
+      >
+        <Moon size={16} />
+      </button>
+      {open && (
+        <div className="absolute right-0 bottom-full z-40 mb-2 w-52 rounded-lg border border-line bg-panel p-1 shadow-2xl shadow-ink/70">
+          <p className="px-2.5 py-1.5 text-[11px] text-ash">{label}</p>
+          <div className="my-1 h-px bg-line" />
+          {[15, 30, 45, 60].map((m) => (
+            <button
+              key={m}
+              onClick={() => {
+                setSleep(m)
+                setOpen(false)
+              }}
+              className={item}
+            >
+              In {m} minutes
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              setSleep('track')
+              setOpen(false)
+            }}
+            className={item}
+          >
+            At the end of this track
+          </button>
+          {armed && (
+            <>
+              <div className="my-1 h-px bg-line" />
+              <button
+                onClick={() => {
+                  setSleep(null)
+                  setOpen(false)
+                }}
+                className={`${item} text-ember`}
+              >
+                Turn off
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function PlayerBar({
   onToggleQueue,
   queueOpen
@@ -87,64 +195,8 @@ export default function PlayerBar({
   onToggleQueue: () => void
   queueOpen: boolean
 }): React.JSX.Element {
-  const audio = useRef<HTMLAudioElement>(null)
-  const [position, setPosition] = useState(0)
-  const [duration, setDuration] = useState(0)
   const s = usePlayer()
-
-  // Resolve before playing: <audio> only ever reports "source failed", while
-  // prepare() names the reason and warms the cache the protocol handler reads.
-  useEffect(() => {
-    const el = audio.current
-    if (!el) return
-    if (!s.current) {
-      el.removeAttribute('src')
-      el.load()
-      return
-    }
-    const track = s.current
-    let stale = false
-    window.api
-      .prepare(track.videoId)
-      .then(() => {
-        if (stale) return
-        // Recorded only once the stream resolved: a track that never played is
-        // not something the user listened to, and must not skew the history.
-        window.api.lib
-          .play(track)
-          .then(() => usePlayer.getState().libraryChanged())
-          .catch(() => {})
-        // Session history is what stops autoplay serving the same track twice.
-        usePlayer.getState().notePlayed(track.videoId)
-        el.src = window.api.streamUrl(track.videoId)
-        // Rejects with AbortError whenever the next track replaces this src;
-        // a genuine failure arrives on the element's error event instead.
-        el.play().catch(() => {})
-      })
-      .catch((err: unknown) => {
-        if (stale) return
-        s.toast(`Skipped "${track.title}" — ${err instanceof Error ? err.message : err}`)
-        s.next(true)
-      })
-    return () => {
-      stale = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.current])
-
-  useEffect(() => {
-    const el = audio.current
-    if (!el || !el.getAttribute('src')) return
-    if (s.playing) el.play().catch(() => {})
-    else el.pause()
-  }, [s.playing])
-
-  useEffect(() => {
-    const el = audio.current
-    if (!el) return
-    el.volume = s.volume
-    el.muted = s.muted
-  }, [s.volume, s.muted])
+  const { deckA, deckB, position, duration, seek, current: liveDeck } = useAudioEngine(s.crossfade)
 
   // Media keys and tray clicks. Registered once and reading the store directly,
   // so the subscription does not churn on every render.
@@ -155,12 +207,21 @@ export default function PlayerBar({
         if (command === 'playpause') p.setPlaying(!p.playing)
         else if (command === 'next') p.next()
         else if (command === 'stop') p.setPlaying(false)
-        else if (command === 'previous' && !p.previous() && audio.current) {
-          audio.current.currentTime = 0
+        else if (command === 'previous' && !p.previous()) {
+          const el = liveDeck()
+          if (el) el.currentTime = 0
         }
       }),
-    []
+    [liveDeck]
   )
+
+  // The queue has run dry. Repeat is handled inside autoplayIfIdle, which is a
+  // no-op unless autoplay genuinely applies.
+  useEffect(() => {
+    if (s.current || s.queue.length) return
+    void s.autoplayIfIdle()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.current, s.queue.length])
 
   // The tray menu and the OS media overlay are the two places playback shows up
   // outside the window; both are fed from here.
@@ -168,7 +229,8 @@ export default function PlayerBar({
     window.api.setNowPlaying({
       title: s.current?.title ?? null,
       artist: s.current?.artist ?? null,
-      playing: s.playing
+      playing: s.playing,
+      thumbnailUrl: s.current?.thumbnailUrl ?? null
     })
     if (!('mediaSession' in navigator)) return
     navigator.mediaSession.metadata = s.current
@@ -182,17 +244,24 @@ export default function PlayerBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.current, s.playing])
 
-  // The queue has run dry. Repeat is handled inside autoplayIfIdle, which is a
-  // no-op unless autoplay genuinely applies.
+  // A wall-clock sleep timer must still fire when nothing is playing, so it
+  // cannot rely on timeupdate alone.
   useEffect(() => {
-    if (s.current || s.queue.length) return
-    void s.autoplayIfIdle()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.current, s.queue.length])
+    if (!s.sleepAt) return
+    const timer = setTimeout(
+      () => usePlayer.getState().endSleep(),
+      Math.max(0, s.sleepAt - Date.now())
+    )
+    return () => clearTimeout(timer)
+  }, [s.sleepAt])
 
-  function seek(to: number): void {
-    if (audio.current) audio.current.currentTime = to
-    setPosition(to)
+  // Pressing Next mid-track is a negative signal for recommendations.
+  const skipForward = (): void => {
+    const el = liveDeck()
+    if (s.current && el && el.duration > 0 && el.currentTime < el.duration * 0.5) {
+      window.api.lib.skipped(s.current.videoId).catch(() => {})
+    }
+    s.next()
   }
 
   const RepeatIcon = s.repeat === 'one' ? Repeat1 : Repeat
@@ -201,27 +270,9 @@ export default function PlayerBar({
 
   return (
     <footer className="relative z-20 flex h-[76px] shrink-0 items-center gap-6 border-t border-line bg-panel px-4">
-      <audio
-        ref={audio}
-        onLoadStart={() => {
-          setPosition(0)
-          setDuration(0)
-        }}
-        onTimeUpdate={(e) => setPosition(e.currentTarget.currentTime)}
-        onDurationChange={(e) => setDuration(e.currentTarget.duration)}
-        onPlay={() => s.setPlaying(true)}
-        onPause={() => s.setPlaying(false)}
-        onEnded={() => {
-          if (s.repeat !== 'one') return s.next()
-          seek(0)
-          audio.current?.play().catch(() => {})
-        }}
-        onError={() => {
-          if (!s.current) return
-          s.toast(`Skipped "${s.current.title}" — playback failed`)
-          s.next(true)
-        }}
-      />
+      {/* Two decks so tracks can overlap; the engine decides which is audible. */}
+      <audio ref={deckA} />
+      <audio ref={deckB} />
 
       {/* Left: what is playing. The bloom behind the artwork is the app's one
           piece of decoration, and it exists only while sound is coming out. */}
@@ -287,7 +338,7 @@ export default function PlayerBar({
           </button>
           <button
             className={`${icon} ${idle} disabled:opacity-30`}
-            onClick={() => s.next()}
+            onClick={skipForward}
             disabled={!s.current && !s.queue.length}
             title="Next"
           >
@@ -319,6 +370,21 @@ export default function PlayerBar({
 
       {/* Right: output. */}
       <div className="flex w-[26%] items-center justify-end gap-1">
+        <button
+          onClick={s.toggleLyrics}
+          title={s.lyricsOpen ? 'Hide lyrics' : 'Show lyrics'}
+          className={`${icon} ${s.lyricsOpen ? lit : idle}`}
+        >
+          <Mic2 size={16} />
+        </button>
+        <button
+          onClick={() => window.api.mini.toggle()}
+          title="Mini player — a compact window that stays on top"
+          className={`${icon} ${idle}`}
+        >
+          <Minimize2 size={16} />
+        </button>
+        <SleepTimer />
         <button
           onClick={() => s.setAutoplay(!s.autoplay)}
           title={

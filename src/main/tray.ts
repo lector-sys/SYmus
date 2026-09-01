@@ -27,6 +27,10 @@ const send = (command: MediaCommand): void => {
 }
 
 function show(window: BrowserWindow): void {
+  // With minimize-to-tray off, closing the window really destroys it while the
+  // tray (and its menu, holding this reference) lives on. Every method below
+  // throws on a destroyed window.
+  if (window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
@@ -84,7 +88,9 @@ export function setupTray(window: BrowserWindow, iconPath: string): void {
   tray = new Tray(image)
   render(window)
 
-  tray.on('click', () => (window.isVisible() ? window.hide() : show(window)))
+  tray.on('click', () =>
+    !window.isDestroyed() && window.isVisible() ? window.hide() : show(window)
+  )
 
   for (const [accelerator, command] of [
     ['MediaPlayPause', 'playpause'],
