@@ -4,7 +4,7 @@ A personal desktop music player. Searches YouTube, streams audio, and keeps your
 playlists, likes and listening history in a local SQLite database. Nothing is
 uploaded anywhere and nothing is written to disk except the library itself.
 
-- **App ID** `com.madhusudan.symusplayer` · **Product name** SYmuS
+- **App ID** `.symusplayer` · **Product name** SYmuS
 
 ## Install
 
